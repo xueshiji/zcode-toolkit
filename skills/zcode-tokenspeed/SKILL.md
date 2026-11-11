@@ -1,6 +1,6 @@
 ---
 name: zcode-tokenspeed
-description: "[仅手动调用，禁止自动触发] ZCode 客户端 TPS 性能状态栏补丁：向 app.asar 注入 zcode-tps.js，在输入框下方常驻展示本轮首 token/tok/s/out 与会话累计指标。全程幂等、可 --check、可 --revert 精确还原。只有当用户明确要求执行本 skill、或明确点名「zcode-tokenspeed」「TPS 状态栏」时才加载；用户只是泛泛提到性能、速度、状态栏等话题时，一律不要自动触发本 skill。"
+description: "[仅手动调用，禁止自动触发] ZCode 客户端 TPS 性能状态栏补丁：向 app.asar 注入 zcode-tps.js，在输入框下方常驻展示本轮首 token/tok/s 与会话累计指标（真实 usage，不做文本估算）。全程幂等、可 --check、可 --revert 精确还原。只有当用户明确要求执行本 skill、或明确点名「zcode-tokenspeed」「TPS 状态栏」时才加载；用户只是泛泛提到性能、速度、状态栏等话题时，一律不要自动触发本 skill。"
 ---
 
 # ZCode TPS 性能状态栏补丁
@@ -43,7 +43,7 @@ python "<skill目录>/scripts/doctor.py" --fix    # 一键自愈（会排期看�
 
 | 能力 | 命令 | 改动范围 |
 |---|---|---|
-| 输入框下方常驻统计条：本轮首 token / tok/s / out + 会话累计（第 N 轮 / 输入 / 命中率 / 累出 / 思考） | `python zcode_patcher.py --tps-footer [--check/--revert]` | `app.asar`（重打包级：新增 `out/renderer/zcode-tps.js` + `index.html` 挂载） |
+| 输入框下方常驻统计条：本轮首 token / tok/s / 思考 + 会话累计（第 N 轮 / 总用 / 输入 / 命中率 / 累出） | `python zcode_patcher.py --tps-footer [--check/--revert]` | `app.asar`（重打包级：新增 `out/renderer/zcode-tps.js` + `index.html` 挂载） |
 
 通用开关：`--all`（当前仅 TPS）· `--dry-run`（只报告不写盘）· `--verbose`（打印探测细节）·
 `--force`（跳过备份指纹校验，慎用）· `--prune`（清理安装目录产物；`--deep` 连当前备份与
@@ -118,7 +118,8 @@ python "<skill目录>/scripts/zcode_patcher.py" --tps-footer
 
 ## TPS 统计胶囊
 
-> 实现：`zcode-tps.js` 读 ServicePort 事件流，含精确 tok/s / 首 token / out。
+> 实现：`zcode-tps.js` 读 ServicePort 事件流；tok/s、首 token、会话累计都基于真实 usage，
+> **不做文本估算**。
 
 ### 关键约束：绝不调用 `port.start()`
 
@@ -137,8 +138,8 @@ MessagePort 队列一旦启用，消息只派发给「启用瞬间已注册的�
 > **不可用 Node 验证此语义**：Node 的 MessagePort 在 `addEventListener` 时隐式 start，
 > 会让「不 start」也失败，从而误判为方案不可行。
 
-**已知特性**：tok/s 在开始生成后约 1~4 秒才出现（滑动窗口需 ≥2 个采样点，且思考阶段
-无文本增量），期间只显示 `●` 与时间，属预期。
+**已知特性**：tok/s 在本轮第一个模型请求完成（`usage.delta` 到达）后才出现；请求进行期间
+不显示估算速度，保留最近一次真实请求的值。首 token 逐请求更新，当前请求还没首包时先隐藏。
 
 ### 展示与位置
 
@@ -152,24 +153,31 @@ MessagePort 队列一旦启用，消息只派发给「启用瞬间已注册的�
 挂载点找不到（空态/设置页）时自清理。诊断：`window.__ztpsDiag.posMode` / `hiddenReason`。
 
 ```
-生成中:  ● 32 tok/s · out 410 │ 第 8 轮 │ 输入 45.2k · 命中 38.1k · 平均命中 84.00% · 累出 12.3k
-结束后:  ● 首 token 37s · out 1.7k │ 第 8 轮 │ 输入 45.2k · 命中 38.1k · 平均命中 84.00% · 累出 12.3k
-空会话:  ●            （绿点空态常驻）
+生成中（首个请求已完成）: ● 首 token 8s · 32 tok/s · 思考 1.2k │ 第 8 轮 · 总用 57.5k · 输入 45.2k · 命中 38.1k · 平均命中 84.00% · 累出 12.3k
+结束后:                  ● 平均首 token 9s · 平均 35 tok/s · 思考 1.2k │ 第 8 轮 · 总用 57.5k · 输入 45.2k · 命中 38.1k · 平均命中 84.00% · 累出 12.3k
+空会话:                  ●            （绿点空态常驻）
 ```
 
 - **会话累计口径**：轮数=可见轮次数；输入/命中/累出=各轮 `usage.delta` 累加（API 计费视角，
   每轮 inputTokens 含历史所以累计值偏大，属预期）；平均命中=累计命中 ÷ 累计输入，固定两位
-  小数；流式中未报 usage 的轮以内容估算兜底。
-- **渐进降级顺序**：溢出时先丢本轮 out → 首 token → tok/s，会话累计段保留。
+  小数。不做估算：请求完成前不计入，`usage.delta` 到达后一次性计入。
+- **渐进降级顺序**：溢出时先丢总用 → 首 token → tok/s；轮数/输入/命中/累出保留。
 
 ### 行为规则（验收标准）
 
 - **绿点 ● 常驻**：有可展示轮次就在；流式生成中发亮，空闲静态。不显示假时钟。
 - **同一 turnId 复用（编辑重发/重试）自动清零**：检测到新一轮开始即重置旧统计。
-- **out 语义**：本轮累计输出（最近一次提问→回答完成），非会话累计。
-- **动态刷新**：流式中 1 秒节奏刷新；tok/s 为 4 秒滑动窗口即时速度；基于回答文本估算
-  （CJK 1 字≈1 token、其余 4 字符≈1 token）。`usage.delta` 精确值到达即覆盖估算。
-- **静默期保持**：工具执行期间速度保持最近值；点停止/出错时不报 usage，out 以估算兜底。
+- **首 token**：从请求开始（`model.request.status` 的 started）到首个非子代理
+  `stream.chunk`；请求进行中逐请求更新，当前请求还没首包时先隐藏；轮结束后显示本轮
+  各请求首 token 的算术平均。第一个请求缺 started 时用轮开始时间兜底，后续请求缺
+  started 时该请求不计入平均。
+- **tok/s**：只取真实 usage；每个模型请求完成（`usage.delta`）后更新一次；轮结束后显示
+  按 `outputTokens` 加权的平均速度：`Σ(out_i × tps_i) / Σ out_i`。其中 `tps_i` 是该请求
+  的 `outputTokens ÷ decode 时长`，decode 时长优先取官方 `durationMs − TTFT`。
+- **动态刷新**：首 token 在请求首包到达时逐请求更新；token 数与 tok/s 在 `usage.delta`
+  到达时更新一次；不做文本估算。
+- **静默期**：工具执行期间不刷新 tok/s，保留最近一次真实请求的值；停止/出错且没有 usage
+  时不做估算，相关 token 暂不计入累计。
 - **切换会话立即消失**：只认「DOM 可见轮次（`section[data-turn-id]`）+
   `data-session-id` 匹配当前会话」双重条件，不依赖会话切换事件。
 - **历史会话累计缺失**：usage.delta 不回放，重新打开旧会话拿不到当时统计，属预期。
@@ -182,17 +190,19 @@ MessagePort 队列一旦启用，消息只派发给「启用瞬间已注册的�
    （`window.__ztpsHook` 可对存量端口手动补挂，`window.__ztpsPort` 供调试旁路监听）。
 2. 协议帧是二进制内嵌 JSON，两类：
    - **version:1 事件流**：`usage.delta`（inputTokens/outputTokens/cacheReadTokens/
-     totalTokens/reasoningTokens，每次模型请求完成时发）、`stream.chunk`
-     （assistantMessageId + chunkLength + channel，流式期间每 50-100ms 一批）。
-   - **conversation 行事件**：`turnHeader`、`userInput`、`reasoning`/`assistantText`、
-     `row.delta`。
+     totalTokens/reasoningTokens，每次模型请求完成时发）、`model.request.status`
+     （requestId/status/querySource/durationMs，用于逐请求首 token 与速度）、
+     `stream.chunk`（assistantMessageId + chunkLength + channel，流式期间每 50-100ms 一批）。
+     若客户端额外下发 `model.request.metrics`，脚本优先使用其中的
+     `durationMs` / `timeToFirstContentMs`。
+   - **conversation 行事件**：`turnHeader`、`userInput`、`reasoning`/`assistantText`。
 3. **轮关联链**：轮的 key 是 productTurnId（`msg_xxx`，与 DOM `section[data-turn-id]` 一致）；
    `stream.chunk` 的 assistantMessageId 是 assistantResponseId，需经行事件的
    `assistantResponseId → turnId` 映射中转；`usage.delta` 经 `sourceCommandId` 关联。
-   关联断了的表现：out/tok/s 一直不出现。
+   关联断了的表现：tok/s 与 token 一直不出现。
 4. 渲染：扫描 `section[data-turn-id]` + sessionId 双条件取当前会话最新轮 → 算指标 → 更新胶囊。
-5. 刷新：MutationObserver 里 16ms 节流同步刷新（切换会话零残留）＋ 60ms 防抖全量扫描
-   ＋ 1s 估算刷新；渲染带内容签名，数据未变零 DOM 写，避免 observer 自激。
+5. 刷新：MessagePort 事件驱动 + 500ms 轻量巡检；`usage.delta` 到达时更新一次；渲染带内容
+   签名，数据未变零 DOM 写。
 
 ### 注入原理（asar 重打包级）
 
@@ -218,8 +228,8 @@ MessagePort 队列一旦启用，消息只派发给「启用瞬间已注册的�
 | 升级后胶囊消失 | `app.asar` 被覆盖，重跑 `--tps-footer` |
 | 重启后无胶囊 | `--tps-footer --check` 看 state；渲染进程 console 查 `window.__ztps` |
 | console 出现 CSP 拦截 | 当前版本 index.html 无 CSP；未来若加了需同步放宽 `script-src` |
-| 指标只有「● 时间」 | `usage.delta` 未关联到轮（看 `window.__ztpsTurns` 的 out/lastUsageAt）；用 `window.__ztpsPort` 旁路比对字段 |
-| tok/s 不出现 | 该轮无文本流（纯工具调用）时无可计算，属预期 |
+| 指标只有「●」绿点 | `usage.delta` 未关联到轮（看 `window.__ztpsTurns` 的 outputTokens/lastUsageAt/requests）；用 `window.__ztpsPort` 旁路比对字段 |
+| tok/s 不出现 | 本轮还没有请求完成（`usage.delta` 未到）；或缺少请求耗时（`model.request.status`/`metrics` 未下发），无法算速度 |
 | 想换脚本逻辑 | 改 `zcode-tps.js` 后重跑 `--tps-footer`（内容变了会热更新脚本条目，无需 revert） |
 
 ## ★★ 插件更新 ≠ 补丁更新：`stale` 态

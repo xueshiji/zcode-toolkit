@@ -1,6 +1,6 @@
 {
   "name": "zcode-tokenspeed",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "ZCode 桌面客户端 TPS 实时状态栏：首 token 延迟、tok/s 生成速度、Token 统计与会话命中率常驻展示。内置客户端升级自动感知与无感自愈看护，幂等、安全可还原。",
   "author": {
     "name": "c80361619"

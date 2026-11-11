@@ -5,7 +5,7 @@
     {
       "name": "zcode-tokenspeed",
       "source": "./",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "icon": "https://raw.githubusercontent.com/c80361619/zcode-toolkit/main/assets/icon.png",
       "description": "ZCode 桌面客户端 TPS 实时状态栏：首 token 延迟、tok/s 生成速度、Token 统计与会话命中率常驻展示。内置客户端升级自动感知与无感自愈看护，幂等、安全可还原。",
       "displayName": "ZCode TPS 状态栏",

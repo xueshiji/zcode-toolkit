@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode TPS 性能状态栏
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.7.0-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.7.1-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -10,8 +10,8 @@
 
 给 ZCode 桌面客户端加一条**常驻的实时 TPS 与性能状态栏**：
 
-- 📊 **本轮即时指标**：首 Token 延迟、tok/s 生成速度、本轮输出 Token。
-- 🧮 **会话累计指标**：第 N 轮、累计输入/输出、缓存命中率、累计思考 Token。
+- 📊 **本轮即时指标**：首 Token 延迟、tok/s 生成速度、本轮思考 Token。
+- 🧮 **会话累计指标**：第 N 轮、总用量、累计输入/输出、缓存命中率、累计思考 Token。
 - 🖱️ **位置随你选**：输入框下方（默认）/ 输入框工具栏 / 会话顶部 sticky，右键切换并记忆。
 - 🛡️ **升级无感自愈**：客户端升级覆盖 `app.asar` 后，插件自动感知并重新排期注入。
 - ♻️ **幂等、安全、可还原**：全程 Python 标准库，零第三方依赖；写入前自动备份并校验指纹。
@@ -40,13 +40,12 @@
 
 | 指标 | 含义 |
 |:---|:---|
-| 首 token | 从本轮开始到第一段正文到达的延迟 |
-| tok/s | 最近 4 秒滑动窗口内的生成速度（精确值到达后自动切换） |
-| 本轮 out | 本轮累计输出 Token |
-| 第 N 轮 | 当前会话已完成的轮次 |
-| 输入 / 累出 | 会话累计输入 Token / 累计输出 Token |
-| 命中 + 平均命中率 | 会话累计缓存命中 Token 与平均命中率 |
-| 思考 | 会话累计推理 Token（模型上报时显示） |
+| 首 token | 请求开始到首个流式块；请求进行中逐请求更新，轮结束后显示本轮各请求的平均值 |
+| tok/s | 每个模型请求完成后按真实 tokens 更新；轮结束显示按输出 tokens 加权的平均速度 |
+| 第 N 轮 | 脚本当前观察到的轮次（不是历史会话序号） |
+| 总用 / 输入 / 累出 | 会话累计总用量 / 输入 Token / 输出 Token（真实 usage，不做估算） |
+| 命中 + 平均命中率 | 会话累计缓存命中 Token 与「缓存读 ÷ 总输入」的加权命中率 |
+| 思考 | 最近一轮推理 Token（模型上报时显示） |
 
 统计条默认挂在输入框下方；**右键胶囊**可切到「输入框工具栏」或「会话顶部 sticky」。
 空会话显示绿点空态，常驻但不打扰。
@@ -151,6 +150,10 @@ node tests/tps_pct_smoke.js
 
 <details>
 <summary><b>TPS 相关更新记录</b></summary>
+
+#### 0.7.1
+- tok/s 与 token 统计改为只取真实 usage，移除文本估算；
+- 每个模型请求完成后更新一次；轮结束后首 token 显示本轮平均值，tok/s 显示按输出 tokens 加权的平均速度。
 
 #### 0.7.0
 - 仓库精简为单一 TPS 状态栏，移除用量图表、提示词增强、模型拉取与相关诊断工具；

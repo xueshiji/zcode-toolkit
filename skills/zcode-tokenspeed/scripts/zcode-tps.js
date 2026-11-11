@@ -1,12 +1,13 @@
 /**
  * ZCode 状态栏：TPS 统计胶囊 —— 事件流实现（唯一方案）
  * ==================================================
- * 输入框工具栏常驻胶囊：● 时间 · 首 token · tok/s · out（当前会话最近一轮）
+ * 输入框工具栏常驻胶囊：● 首 token · tok/s · 思考 │ 第 N 轮 · 总用 · 输入 · 命中 · 累出
  *
  * 数据源（ZCode 主进程经 window.postMessage 转交的 ServicePort 事件流）：
- *   - version:1 事件流：usage.delta（真实 outputTokens/inputTokens）、stream.chunk
- *   - conversation 行事件：turnHeader / userInput / reasoning / assistantText / row.delta
- * 由此得到精确的 tok/s（4s 滑动窗口）、首 token 延迟、out（本轮累计输出）。
+ *   - version:1 事件流：usage.delta（真实 tokens）、model.request.status、stream.chunk
+ *   - conversation 行事件：turnHeader / userInput / reasoning / assistantText
+ * tok/s 与 token 数只取自真实 usage，不做文本估算：每个模型请求完成时更新一次；
+ * 首 token 逐请求更新；一轮结束后，首 token 取本轮各请求的算术平均，tok/s 取按 outputTokens 加权的平均。
  *
  * ⚠️ 关键约束：**绝不调用 port.start()**
  *   MessagePort 队列一旦启用，消息只派发给"启用瞬间已注册的监听器"。本脚本是普通
@@ -20,10 +21,8 @@
  *   注意：不能用 Node 验证此语义——Node 的 MessagePort 在 addEventListener 时隐式
  *   start，会让"不 start"也失败，从而得出错误结论。
  *
- * 已知特性：tok/s 在开始生成后约 1~4 秒才出现（需要滑动窗口内 ≥2 个采样点，且首块到达
- *   前的思考阶段无文本增量可算），期间只显示 ● 与时间，属预期。
- *
- * 基于社区分享版本实现，仅删除 port.start() 一行并补充诊断，计算逻辑与原版一致。
+ * 已知特性：tok/s 在本轮第一个模型请求完成后才出现（usage.delta 到达才有真实 tokens）；
+ *   请求进行期间不显示估算速度，保留最近一次真实请求的值。
  *
  * 安全：只读事件流、只写自己的 host 元素；异常静默；找不到工具栏行时自清理。
  * 位置切换：胶囊右键菜单可在「输入框工具栏(默认) / 会话顶部(sticky)」间切换，
@@ -188,7 +187,6 @@
 
   const turns = new Map();          // turnId(msg_xxx) -> 轮统计
   const firstChunkByScid = {};
-  const rowTurn = new Map();        // rowId -> turnId（row.delta 增量归属）
   const respTurn = new Map();       // assistantResponseId -> turnId（stream.chunk 的 assistantMessageId 归属）
   const scidTurn = new Map();       // sourceCommandId -> turnId（usage.delta 关联兜底）
 
@@ -198,31 +196,63 @@
       startedAt: null, endedAt: null, activeMs: null, modelDurationMs: null,
       firstChunkAt: null, rowFirstAt: null, lastUsageAt: null,
       outputTokens: 0, inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 0,
-      textTok: 0, win: [], streaming: false,
+      requests: new Map(), requestSeq: 0, activeRequestId: null,
+      turnEnded: false, streaming: false,
     });
     return turns.get(id);
   };
+
+  function blankRequest(requestId) {
+    return {
+      requestId,
+      startedAt: null, firstChunkAt: null,
+      statusEndedAt: null, statusDurationMs: null,
+      metricsDurationMs: null, metricsTtft: null,
+      outputTokens: 0, metricsOutputTokens: 0,
+      usageSeen: false, endedAt: null,
+    };
+  }
+
+  function newAnonRequest(t) {
+    const id = "anon:" + (++t.requestSeq);
+    const r = blankRequest(id);
+    t.requests.set(id, r);
+    t.activeRequestId = id;
+    return r;
+  }
+
+  // 每个模型请求的真实用量与耗时；请求结束（usage.delta）后才有有效值
+  function requestOf(t, requestId) {
+    if (!requestId) {
+      const active = t.activeRequestId ? t.requests.get(t.activeRequestId) : null;
+      if (active && !active.usageSeen) return active;
+      return newAnonRequest(t);
+    }
+    let r = t.requests.get(requestId);
+    if (r) return r;
+    // 没有 started 事件时先按 chunk 建了匿名请求，拿到 requestId 后接管它
+    const active = t.activeRequestId ? t.requests.get(t.activeRequestId) : null;
+    if (active && active.requestId.startsWith("anon:") && !active.usageSeen) {
+      t.requests.delete(active.requestId);
+      active.requestId = requestId;
+      t.requests.set(requestId, active);
+      t.activeRequestId = requestId;
+      return active;
+    }
+    r = blankRequest(requestId);
+    t.requests.set(requestId, r);
+    return r;
+  }
 
   // 轮复用（编辑重发/重试复用同一 turnId）时清空上一轮统计，避免旧值残留到新轮
   function resetTurnStats(t) {
     t.endedAt = null; t.activeMs = null; t.modelDurationMs = null;
     t.firstChunkAt = null; t.rowFirstAt = null; t.lastUsageAt = null;
     t.outputTokens = 0; t.inputTokens = 0; t.cacheReadTokens = 0; t.cacheWriteTokens = 0; t.reasoningTokens = 0; t.totalTokens = 0;
-    t.textTok = 0; t.win = []; t.lastTps = null; t.streaming = true;
+    t.requests.clear(); t.activeRequestId = null; t.requestSeq = 0;
+    t.turnEnded = false; t.streaming = true;
+    if (t.sourceCommandId) delete firstChunkByScid[t.sourceCommandId];
   }
-
-  // token 粗估：CJK 字符 1 字 ≈ 1 token，其余 4 字符 ≈ 1 token
-  const estTok = (s) => {
-    let n = 0;
-    for (let i = 0; i < s.length; i++) n += s.charCodeAt(i) > 0x2e7f ? 1 : 0.25;
-    return Math.round(n);
-  };
-
-  const pushWin = (t, ts, tok) => {
-    t.win.push([ts, tok]);
-    const floor = ts - 6000;
-    while (t.win.length > 2 && t.win[0][0] < floor) t.win.shift();
-  };
 
   let scanRaf = 0;
   function scheduleScan() {
@@ -235,51 +265,47 @@
 
   function onRow(row) {
     if (!row) return;
-    if (row.op === "row.delta") { onRowDelta(row); return; }
     if (!row.turnId) return;
     const t = get(row.turnId);
-    if (row.rowId != null) rowTurn.set(row.rowId, row.turnId);
     if (row.kind === "turnHeader") {
       if ((t.endedAt != null || t.lastUsageAt != null) && row.startedAt && row.startedAt !== t.startedAt) resetTurnStats(t);
       t.startedAt = row.startedAt ?? t.startedAt;
       t.endedAt = row.endedAt ?? t.endedAt;
       t.activeMs = row.activeMs ?? t.activeMs;
       t.modelDurationMs = row.modelDurationMs ?? t.modelDurationMs;
-      t.streaming = row.state != null && !/^(completedSuccess|completed|failed|stopped|cancelled)/.test(row.state);
+      const terminal = row.state != null && /^(completedSuccess|completed|failed|stopped|cancelled)/.test(row.state);
+      t.streaming = row.state != null && !terminal;
+      if (terminal || row.endedAt != null) t.turnEnded = true;
+      else if (row.state === "running") t.turnEnded = false;
       if (row.sourceCommandId) t.sourceCommandId = row.sourceCommandId;
       scheduleScan();
     } else if (row.kind === "userInput") {
       if ((t.endedAt != null || t.lastUsageAt != null) && row.createdAt && row.createdAt !== t.startedAt) resetTurnStats(t);
       t.startedAt = row.createdAt ?? t.startedAt;
       t.streaming = true;
+      t.turnEnded = false;
       if (row.sourceCommandId) t.sourceCommandId = row.sourceCommandId;
       scheduleScan();
     } else if (row.kind === "reasoning" || row.kind === "assistantText") {
       if (row.assistantResponseId) respTurn.set(row.assistantResponseId, row.turnId);
-      if (row.text && row.text.length) t.textTok = estTok(row.text);   // 全量覆盖，防增量累计漂移
       if (t.firstChunkAt == null && t.rowFirstAt == null && row.createdAt) {
         t.rowFirstAt = row.createdAt;   // 兜底首块（优先 stream.chunk）
       }
     }
   }
 
-  function onRowDelta(row) {
-    if (row.path !== "text" || !row.append) return;
-    const turnId = rowTurn.get(row.rowId);
-    if (!turnId) return;
-    const t = turns.get(turnId);
-    if (!t) return;
-    t.textTok += estTok(row.append);
-    pushWin(t, Date.now(), t.textTok);
-  }
-
   function onEvent(ev) {
     if (!ev || ev.version !== 1) return;
     const scid = ev.sourceCommandId;
+    if (diag) diag.eventKinds[ev.kind] = (diag.eventKinds[ev.kind] || 0) + 1;
     if (ev.kind === "usage.delta") {
       if (!scid) return;
       const t = findByScid(scid) || turns.get(scidTurn.get(scid));
       if (!t) return;
+      const r = requestOf(t, ev.requestId);
+      r.outputTokens += ev.outputTokens || 0;
+      r.usageSeen = true;
+      r.endedAt = ev.occurredAt ?? r.endedAt;
       t.outputTokens += ev.outputTokens || 0;
       t.inputTokens += ev.inputTokens || 0;
       t.cacheReadTokens += ev.cacheReadTokens || 0;
@@ -291,9 +317,16 @@
       if (t.firstChunkAt == null && firstChunkByScid[scid] != null) {
         t.firstChunkAt = firstChunkByScid[scid];
       }
+      // 只有本轮的首次请求才能借用轮级首包；后续请求必须用自己的 chunk 时间
+      const firstReq = t.requests.values().next().value;
+      if (r.firstChunkAt == null && firstReq === r && firstChunkByScid[scid] != null) {
+        r.firstChunkAt = firstChunkByScid[scid];
+      }
       scheduleScan();
     } else if (ev.kind === "stream.chunk") {
-      if (firstChunkByScid[scid] == null) firstChunkByScid[scid] = ev.occurredAt;
+      // 子代理/工具内嵌的 chunk 不计入本轮首 token 与速度
+      if (ev.parentToolCallId) return;
+      if (scid && firstChunkByScid[scid] == null) firstChunkByScid[scid] = ev.occurredAt;
       let t = findByScid(scid);
       if (!t && ev.assistantMessageId) {
         const tid = respTurn.get(ev.assistantMessageId);
@@ -301,10 +334,59 @@
       }
       if (!t && scid && scidTurn.has(scid)) t = turns.get(scidTurn.get(scid));
       if (!t) return;
-      if (t.firstChunkAt == null) t.firstChunkAt = firstChunkByScid[scid];
+      let r = t.activeRequestId ? t.requests.get(t.activeRequestId) : null;
+      // 上一个请求已结束（拿到 usage 或终态）后，新 chunk 视为下一请求；
+      // 这样即使客户端没发 model.request.status，也能按 chunk 边界分请求。
+      if (!r || r.usageSeen || r.statusEndedAt != null) r = newAnonRequest(t);
+      const at = ev.occurredAt || Date.now();
+      if (r.firstChunkAt == null) r.firstChunkAt = at;
+      if (t.firstChunkAt == null) t.firstChunkAt = at;
       t.sessionId = ev.sessionId || t.sessionId;
       t.streaming = true;   // turnHeader 未到时也标记生成中
-      pushWin(t, ev.occurredAt || Date.now(), t.textTok);   // 心跳采样，保证窗口时间轴连续
+      scheduleScan();
+    } else if (ev.kind === "model.request.status") {
+      if (ev.querySource && ev.querySource !== "main_turn") return;
+      const t = findByScid(scid) || (ev.turnId && turns.get(ev.turnId));
+      if (!t) return;
+      const r = requestOf(t, ev.requestId);
+      if (ev.status === "model_request_started") {
+        if (r.startedAt == null) {
+          r.startedAt = ev.occurredAt;
+        } else if (!r.usageSeen && r.startedAt !== ev.occurredAt) {
+          r.startedAt = ev.occurredAt;
+          r.firstChunkAt = null;
+          r.statusEndedAt = null;
+          r.statusDurationMs = null;
+          r.metricsDurationMs = null;
+          r.metricsTtft = null;
+        }
+        t.activeRequestId = r.requestId;
+        t.streaming = true;
+      } else if (ev.status === "model_retry_scheduled") {
+        if (!r.usageSeen) {
+          r.startedAt = ev.occurredAt;
+          r.firstChunkAt = null;
+          r.statusEndedAt = null;
+          r.statusDurationMs = null;
+          r.metricsDurationMs = null;
+          r.metricsTtft = null;
+        }
+        t.activeRequestId = r.requestId;
+        t.streaming = true;
+      } else if (ev.status === "model_request_completed" || ev.status === "model_request_failed") {
+        r.statusEndedAt = ev.occurredAt ?? r.statusEndedAt;
+        if (ev.durationMs != null) r.statusDurationMs = ev.durationMs;
+      }
+      scheduleScan();
+    } else if (ev.kind === "model.request.metrics") {
+      if (ev.querySource && ev.querySource !== "main_turn") return;
+      const t = findByScid(scid) || (ev.turnId && turns.get(ev.turnId));
+      if (!t) return;
+      const r = requestOf(t, ev.requestId);
+      if (ev.durationMs != null) r.metricsDurationMs = ev.durationMs;
+      if (ev.timeToFirstContentMs != null) r.metricsTtft = ev.timeToFirstContentMs;
+      if (ev.outputTokens != null) r.metricsOutputTokens = ev.outputTokens;
+      scheduleScan();
     }
   }
 
@@ -334,7 +416,7 @@
       const evs = payload.events || payload.deltas || [];
       for (const e of evs) {
         if (e.row) onRow(e.row);
-        else if (e.op === "row.appended" || e.op === "row.upserted" || e.op === "row.delta") onRow(e.row || e);
+        else if (e.op === "row.appended" || e.op === "row.upserted") onRow(e.row || e);
       }
     } catch (err) { /* 静默 */ }
   }
@@ -368,42 +450,88 @@
       : `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   };
 
+  // 每个模型请求的真实统计。优先用客户端下发的 duration/TTFT，缺失时用事件时间戳兜底。
+  function requestMetricsOf(t) {
+    const out = [];
+    let i = 0;
+    for (const r of t.requests.values()) {
+      const outTok = r.outputTokens || r.metricsOutputTokens || 0;
+      // 第一个请求缺 started 事件时，用轮开始时间兜底；后续请求必须有自己的 started
+      const reqStart = r.startedAt ?? (i === 0 ? t.startedAt : null);
+      const ttft = r.metricsTtft ?? (
+        reqStart != null && r.firstChunkAt != null ? r.firstChunkAt - reqStart : null
+      );
+      let decodeMs = null;
+      if (r.metricsDurationMs != null && r.metricsTtft != null && r.metricsDurationMs > r.metricsTtft) {
+        decodeMs = r.metricsDurationMs - r.metricsTtft;   // 官方口径：请求耗时扣除首 token 等待
+      } else if (r.statusDurationMs != null && ttft != null && r.statusDurationMs > ttft) {
+        decodeMs = r.statusDurationMs - ttft;
+      } else if (r.firstChunkAt != null && r.statusEndedAt != null && r.statusEndedAt > r.firstChunkAt) {
+        decodeMs = r.statusEndedAt - r.firstChunkAt;      // 请求终态事件时间兜底
+      } else if (r.firstChunkAt != null && r.endedAt != null && r.endedAt > r.firstChunkAt) {
+        decodeMs = r.endedAt - r.firstChunkAt;            // usage 事件时间兜底
+      } else if (reqStart != null && r.endedAt != null && r.endedAt > reqStart) {
+        decodeMs = r.endedAt - reqStart;                  // 无 chunk 时只能用整个请求时长
+      }
+      const tps = outTok > 0 && decodeMs != null && decodeMs > 0
+        ? outTok / (decodeMs / 1000) : null;
+      out.push({ requestId: r.requestId, outputTokens: outTok, ttft, decodeMs, tps, usageSeen: r.usageSeen, endedAt: r.endedAt });
+      i++;
+    }
+    return out;
+  }
+
   function statsOf(t) {
     const firstAt = t.firstChunkAt ?? t.rowFirstAt ?? null;
-    const ttft = firstAt != null && t.startedAt != null ? firstAt - t.startedAt : null;
-    let out = t.outputTokens;
-    if (out === 0 && t.textTok > 0) out = t.textTok;   // 中止/失败未报 usage：以内容估算兜底
-    const reasoning = t.reasoningTokens || 0;
+    let ttft = firstAt != null && t.startedAt != null ? firstAt - t.startedAt : null;
+    const reqs = requestMetricsOf(t);
+    const done = reqs.filter((r) => r.usageSeen);
+    const latestDone = done.length
+      ? done.reduce((a, b) => ((a.endedAt ?? 0) >= (b.endedAt ?? 0) ? a : b))
+      : null;
     let tps = null;
-    if (t.streaming) {
-      out = Math.max(out, t.textTok);   // 流式中 usage 未到，用内容估算补齐（精确值到达后自然切换）
-      const now = Date.now();
-      const win = t.win.filter((w) => now - w[0] <= 4000);
-      if (win.length >= 2) {
-        const dt = (win[win.length - 1][0] - win[0][0]) / 1000;
-        const dtok = win[win.length - 1][1] - win[0][1];
-        if (dt >= 1 && dtok > 0) tps = dtok / dt;
+    let ttftAveraged = false;
+    let tpsAveraged = false;
+
+    if (t.turnEnded) {
+      // 首 token：本轮各请求的算术平均（首包到达即可计入，不等 usage）
+      const ttfts = reqs.map((r) => r.ttft).filter((v) => v != null && v >= 0);
+      if (ttfts.length) {
+        ttft = ttfts.reduce((a, b) => a + b, 0) / ttfts.length;
+        ttftAveraged = true;
       }
-      if (tps == null && t.lastTps != null) tps = t.lastTps;   // 工具执行等静默期：保持最近速度
-    } else {
-      // 优先使用官方下发的精确 modelDurationMs 校准全轮纯模型生成速率
-      if (t.modelDurationMs != null && t.modelDurationMs > 500 && t.outputTokens > 0) {
+
+      // tok/s：按 outputTokens 加权的平均速度：Σ(out_i × tps_i) / Σ out_i
+      const rated = done.filter((r) => r.tps != null && r.outputTokens > 0);
+      const totalOut = rated.reduce((a, r) => a + r.outputTokens, 0);
+      if (totalOut > 0) {
+        tps = rated.reduce((a, r) => a + r.outputTokens * r.tps, 0) / totalOut;
+        tpsAveraged = true;
+      } else if (t.modelDurationMs != null && t.modelDurationMs > 500 && t.outputTokens > 0) {
+        // 没有逐请求耗时时的兜底：官方 turn 级模型耗时（仍是真实数据，但不是加权平均）
         tps = t.outputTokens / (t.modelDurationMs / 1000);
-      } else {
-        const decodeFrom = firstAt ?? t.startedAt;
-        const decodeMs = decodeFrom != null && t.lastUsageAt != null ? t.lastUsageAt - decodeFrom : null;
-        tps = t.outputTokens > 0 && decodeMs > 500 ? t.outputTokens / (decodeMs / 1000) : null;
       }
-      if (tps == null && t.lastTps != null) tps = t.lastTps;
+      if (tps == null && latestDone && latestDone.tps != null) tps = latestDone.tps;
+    } else {
+      // 请求进行中：首 token 逐请求更新；当前请求还没首包时先隐藏，不拿上一请求冒充
+      const active = t.activeRequestId
+        ? reqs.find((r) => r.requestId === t.activeRequestId)
+        : null;
+      const shown = active || (reqs.length ? reqs[reqs.length - 1] : null);
+      ttft = shown && shown.ttft != null && shown.ttft >= 0 ? shown.ttft : null;
+      // tok/s 同上：只在请求完成后显示该请求的真实速度
+      if (latestDone && latestDone.tps != null) tps = latestDone.tps;
     }
-    if (tps != null) t.lastTps = tps;
+
     return {
-      stamp: fmtStamp(t.endedAt || t.startedAt), ttft, tps, out, reasoning,
+      stamp: fmtStamp(t.endedAt || t.startedAt), ttft, tps,
+      ttftAveraged, tpsAveraged,
+      out: t.outputTokens || 0, reasoning: t.reasoningTokens || 0,
       streaming: t.streaming,
     };
   }
 
-  const hasActivity = (t) => t.streaming || t.textTok > 0 || t.outputTokens > 0;
+  const hasActivity = (t) => t.streaming || t.requests.size > 0 || t.outputTokens > 0;
 
   // ---------- 渲染 ①: 输入框工具栏中央（当前会话最近一轮） ----------
   // 工具栏行的定位策略（按稳定性排序，逐级回退；不依赖任何随版本/语言变化的文案）：
@@ -530,7 +658,8 @@
   let diag = null;
   try {
     diag = window.__ztpsDiag = window.__ztpsDiag || {};
-    diag.scriptVersion = "3.14-pos";
+    diag.scriptVersion = "3.18-real";
+    diag.eventKinds = diag.eventKinds || {};
     diag.loadedAt = new Date().toISOString();
   } catch (err) { /* ignore */ }
 
@@ -647,8 +776,8 @@
         agg.cache += t.cacheReadTokens || 0;
         agg.cacheWrite += t.cacheWriteTokens || 0;
         agg.reasoning += t.reasoningTokens || 0;
-        // 流式中 usage 未到的轮以内容估算兜底,精确值到达后自然覆盖
-        agg.output += Math.max(t.outputTokens || 0, t.streaming ? (t.textTok || 0) : 0);
+        // 只用真实 usage；请求未完成时暂时不计入，usage.delta 到达后一次性补上
+        agg.output += t.outputTokens || 0;
         if (!latest || (t.startedAt ?? 0) > (latest.startedAt ?? 0)) latest = t;
       }
       let host = document.querySelector("[" + MARK + "-bar]");
@@ -662,8 +791,9 @@
           diag.latest = {
             msgId: latest.msgId, sessionId: latest.sessionId,
             startedAt: latest.startedAt, endedAt: latest.endedAt,
-            streaming: latest.streaming, out: latest.outputTokens, textTok: latest.textTok,
-            reasoning: latest.reasoningTokens,
+            streaming: latest.streaming, out: latest.outputTokens,
+            reasoning: latest.reasoningTokens, requests: latest.requests.size,
+            turnEnded: latest.turnEnded,
           };
         }
         diag.hostAttached = !!host;
@@ -715,7 +845,7 @@
       }
       const s = statsOf(latest);
       // 内容签名:未变化时完全跳过 DOM 写入与排版回流，达到零开销
-      const key = [s.stamp, s.ttft, s.tps, s.out, s.reasoning, s.streaming,
+      const key = [s.stamp, s.ttft, s.ttftAveraged, s.tps, s.tpsAveraged, s.out, s.reasoning, s.streaming,
                    agg.rounds, agg.input, agg.cache, agg.cacheWrite, agg.reasoning, agg.output].join("|");
       let segs = pill._zsegs;
       if (pill._zkey !== key) {
@@ -739,10 +869,11 @@
         if (s.streaming) dot.style.textShadow = "0 0 6px rgba(74,222,128,.8)";
         pill.appendChild(dot);
         // 段布局:本轮即时指标(g0:首 token/tok/s/思考)+ 会话累计(g1:轮/总用/输入/命中+命中率/累思/累出)。
-        // 组间用竖线分隔,组内用 · ;不显示时间(用户不需要)
+        // tok/s 只在请求完成后用真实 tokens 更新；轮结束显示按 outputTokens 加权的平均。
         segs = [];
-        if (s.ttft != null && s.ttft >= 0) segs.push({ p: 1, g: 0, nodes: [span("首 token "), span(fmtLat(s.ttft), "VALUE")] });
-        if (s.tps != null) segs.push({ p: 2, g: 0, nodes: [span(fmtTps(s.tps) + " tok/s", "ACCENT")] });
+        const ttftLabel = s.ttftAveraged ? "平均首 token " : "首 token ";
+        if (s.ttft != null && s.ttft >= 0) segs.push({ p: 1, g: 0, nodes: [span(ttftLabel), span(fmtLat(s.ttft), "VALUE")] });
+        if (s.tps != null) segs.push({ p: 2, g: 0, nodes: [span((s.tpsAveraged ? "平均 " : "") + fmtTps(s.tps) + " tok/s", "ACCENT")] });
         if (s.reasoning > 0) segs.push({ p: 2.5, g: 0, nodes: [span("思考 "), span(fmtTok(s.reasoning), "ACCENT")] });
         if (agg.rounds > 0) segs.push({ p: 4, g: 1, nodes: [span("第 " + agg.rounds + " 轮")] });
         const totalTok = (agg.input || 0) + (agg.output || 0);
@@ -789,7 +920,7 @@
   }
 
   // ---------- 渲染 ②: 清理历史遗留的逐轮统计行（统计只在工具栏展示） ----------
-  // 轮次表回收：turns / rowTurn / respTurn / scidTurn / firstChunkByScid 原来只增不删，
+  // 轮次表回收：turns / respTurn / scidTurn / firstChunkByScid 原来只增不删，
   // 长会话或长时间挂着会一直涨。规则：不在当前可见轮次里、且 30 分钟没有活动的记录删掉。
   const PRUNE_MS = 30 * 60 * 1000;
   let lastVisible = null;
@@ -801,7 +932,6 @@
       if (now - last <= PRUNE_MS) continue;
       turns.delete(id);
       if (t.sourceCommandId) scidTurn.delete(t.sourceCommandId);
-      for (const [rid, tid] of rowTurn) if (tid === id) rowTurn.delete(rid);
       for (const [rid, tid] of respTurn) if (tid === id) respTurn.delete(rid);
     }
     for (const k of Object.keys(firstChunkByScid)) {

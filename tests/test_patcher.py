@@ -964,6 +964,23 @@ class TestTpsSidePaneIsolation(unittest.TestCase):
         self.assertIn('span("总用 ")', self.src, "会话累计中必须包含会话总用量")
         self.assertIn('fmtTok(totalTok)', self.src, "总用量必须格式化输出")
 
+    def test_tps_metrics_use_real_usage_only(self):
+        """禁止文本估算：tok/s 与 token 数只取 usage.delta 的真实值。"""
+        self.assertNotIn("estTok", self.src, "不得再用字符数估算 token")
+        self.assertNotIn("textTok", self.src, "不得再用文本长度兜底 token")
+        self.assertNotIn("pushWin", self.src, "不得再用文本采样窗口估算 tok/s")
+        self.assertIn('ev.kind === "usage.delta"', self.src)
+        self.assertIn('ev.kind === "model.request.status"', self.src)
+
+    def test_tps_turn_end_averages_ttft_and_weighted_tps(self):
+        """轮结束后：首 token 取本轮各请求的平均；tok/s 按 outputTokens 加权。"""
+        self.assertIn("const ttfts = reqs.map((r) => r.ttft)", self.src)
+        self.assertIn('reqs.find((r) => r.requestId === t.activeRequestId)', self.src)
+        self.assertIn("a + r.outputTokens * r.tps", self.src)
+        self.assertIn("const totalOut", self.src)
+        self.assertIn("平均首 token", self.src)
+        self.assertIn('? "平均 "', self.src)
+
 
 class TestDoctor(unittest.TestCase):
     """doctor.py 是「插件装了没生效」时的第一入口。它靠一批常量去定位安装目录、
