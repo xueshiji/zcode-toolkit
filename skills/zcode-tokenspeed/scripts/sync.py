@@ -531,7 +531,7 @@ def get_client_fingerprint() -> dict:
             "size": stat.st_size,
             "mtime": int(stat.st_mtime),
         }
-    except Exception:
+    except (Exception, SystemExit):
         return {}
 
 
