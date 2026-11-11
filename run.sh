@@ -12,6 +12,9 @@
 
 set -eu
 
+# 与 run.cmd 对齐：管道/重定向下 Windows 默认按 ANSI 代码页输出，中文会丢成 ?。
+export PYTHONIOENCODING=utf-8
+
 # 定位仓库根 = 本脚本所在目录。
 #
 # ★ Windows / Git Bash（MSYS2）的坑：`pwd -P` 返回 POSIX 形式 `/f/foo/bar`，

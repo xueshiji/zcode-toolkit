@@ -1934,7 +1934,9 @@ class TestDoctorDiscovery(unittest.TestCase):
         """--where 必须真能从命令行跑通（check_plugin 的提示里已经写了它）。"""
         import doctor
         r = subprocess.run([sys.executable, str(doctor.__file__), "--where"],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, encoding="utf-8", errors="replace",
+                           env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                           timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr[-400:])
         self.assertIn("插件位置扫描", r.stdout)
 
