@@ -5,7 +5,7 @@
 → 重启 ZCode → 记录日志后退出。日志: scripts/_apply_after_exit.log
 
 两种调用方式：
-  1) 无参数（本地计划任务）：应用 档位配置 + TPS 状态栏 + 滑条 + 拉取按钮（见 DEFAULT_TASKS）
+  1) 无参数（本地计划任务）：应用 TPS 状态栏（见 DEFAULT_TASKS）
   2) `--want=<键>=on|off`（插件 sync.py 传入，可多个）：只处理指定开关，off 走 --revert
 
 取消方式: schtasks /Delete /TN ZCodePatchApply /F（并删除本脚本）
@@ -129,17 +129,11 @@ def resolve_install() -> tuple[Path | None, Path | None]:
 
 # 配置键 -> zcode_patcher.py 参数（与 sync.py 的 PATCHES 一一对应，顺序也保持一致）
 PATCH_ARGS = {
-    "usage_chart": ["--usage-chart"],
     "tps_footer": ["--tps-footer"],
-    "enhance_prompt": ["--enhance-prompt"],
-    "model_puller": ["--model-puller"],
 }
-# 未收到 --want 时的默认动作（本地计划任务用）：全量 4 项补丁按序全部应用
+# 未收到 --want 时的默认动作（本地计划任务用）：应用 TPS 状态栏
 DEFAULT_TASKS = [
-    ["--usage-chart"],
     ["--tps-footer"],
-    ["--enhance-prompt"],
-    ["--model-puller"],
 ]
 
 
@@ -159,6 +153,8 @@ def _save_wants(argv: list[str]) -> None:
             if key in PATCH_ARGS:
                 enabled = val.strip().lower() not in ("off", "false", "0", "no")
                 wants_dict[key] = enabled
+    # 丢弃已移除功能的历史开关键，避免旧 WANT_FILE 被原样写回
+    wants_dict = {k: v for k, v in wants_dict.items() if k in PATCH_ARGS}
     if wants_dict:
         try:
             import json
@@ -189,6 +185,8 @@ def parse_wants(argv: list[str]):
             key = key.strip()
             if key in PATCH_ARGS:
                 merged_wants[key] = val.strip().lower() not in ("off", "false", "0", "no")
+    # 旧版本可能留下已移除功能的键：忽略而不是 KeyError，否则看护会在启动时直接崩溃
+    merged_wants = {k: v for k, v in merged_wants.items() if k in PATCH_ARGS}
 
     if not has_explicit_input and not merged_wants:
         return None
@@ -203,11 +201,7 @@ def batch_tasks(tasks: list[tuple[list[str], bool]]) -> list[tuple[list[str], bo
 
     规则：
       1. 先执行 revert（还原关闭的项），再执行 apply（应用开启的项）；
-      2. 针对同一方向：
-         - 拥有具体命令行参数的补丁（如 --tps-footer, --enhance-prompt 等）合并为单次批量调用，
-           参数保持既有顺序并去重；
-         - 空参数项（即 core_patch 思维强度内核补丁）保持独立调用（因为 zcode_patcher 在
-           接收 asar 标志时不会跑内核补丁）。
+      2. 针对同一方向：补丁参数合并为单次批量调用，参数保持既有顺序并去重。
     """
     batched = []
     for target_revert in (True, False):
@@ -215,18 +209,12 @@ def batch_tasks(tasks: list[tuple[list[str], bool]]) -> list[tuple[list[str], bo
         if not subset:
             continue
         merged_args = []
-        has_core_patch = False
         for args in subset:
-            if not args:
-                has_core_patch = True
-            else:
-                for a in args:
-                    if a not in merged_args:
-                        merged_args.append(a)
+            for a in args:
+                if a not in merged_args:
+                    merged_args.append(a)
         if merged_args:
             batched.append((merged_args, target_revert))
-        if has_core_patch:
-            batched.append(([], target_revert))
     return batched
 
 
@@ -257,7 +245,7 @@ def main() -> int:
         pass
     _save_wants(sys.argv[1:])
 
-    # 预检：如果明确指定了需求但过滤后无待办任务（如仅 reasoning_config=off），直接退出
+    # 预检：如果明确指定了需求但过滤后无待办任务（如全部为旧版遗留键），直接退出
     early_tasks = parse_wants(sys.argv[1:])
     if early_tasks is not None and not early_tasks:
         log("没有待应用的补丁任务，看护退出，不进行等待与重启")
@@ -281,7 +269,7 @@ def main() -> int:
         log("ZCode 已退出，但检查后无有效补丁任务需要执行，看护完成，不重启 ZCode")
         _cleanup_singletons(cur_pid)
         return 0
-    desc = "、".join(("还原 " if rev else "应用 ") + (" ".join(a) or "内核补丁") for a, rev in raw_tasks)
+    desc = "、".join(("还原 " if rev else "应用 ") + " ".join(a) for a, rev in raw_tasks)
     log(f"ZCode 已退出（等待 {waited}s），开始处理：{desc}")
 
     tasks = batch_tasks(raw_tasks)

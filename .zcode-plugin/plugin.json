@@ -1,35 +1,17 @@
 {
   "name": "zcode-tokenspeed",
-  "version": "0.6.23",
-  "description": "ZCode 桌面客户端全方位原生体验增强套件：TPS 实时状态栏、提示词多模型智能润色、用量图表去截断与设置页模型拉取。内置客户端升级自动感知与无感自愈看护，全量幂等、安全可还原，支持按需逐项开关。",
+  "version": "0.7.0",
+  "description": "ZCode 桌面客户端 TPS 实时状态栏：首 token 延迟、tok/s 生成速度、Token 统计与会话命中率常驻展示。内置客户端升级自动感知与无感自愈看护，幂等、安全可还原。",
   "author": {
     "name": "c80361619"
   },
   "skills": "./skills",
   "commands": "./commands",
   "userConfig": {
-    "usage_chart": {
-      "type": "boolean",
-      "title": "用量页去截断",
-      "description": "「设置 → 用量」趋势图与饼图全量展示，不再只画 Top 6 / Top 5。默认开启；会在你完全退出 ZCode 时写入，下次启动可见。",
-      "default": true
-    },
     "tps_footer": {
       "type": "boolean",
       "title": "TPS 状态栏",
       "description": "输入框下方统计条（本轮指标 + 会话累计，右键可切位置）。默认开启；需要改写 app.asar，会在你完全退出 ZCode 时写入，下次启动可见。",
-      "default": true
-    },
-    "model_puller": {
-      "type": "boolean",
-      "title": "设置页模型拉取按钮",
-      "description": "设置页「⚡️ 自动拉取模型」按钮，勾选即写入配置。默认开启；需要改写 app.asar，会在你完全退出 ZCode 时写入，下次启动可见。",
-      "default": true
-    },
-    "enhance_prompt": {
-      "type": "boolean",
-      "title": "增强提示词按钮",
-      "description": "输入框旁「增强提示词」按钮：一键把草稿改写得更清晰具体，支持「恢复原文」；在按钮上**右键**可按供应商分组选择用哪个模型润色（选中即持久化，零重启生效）。默认开启；需要改写 app.asar，会在你完全退出 ZCode 时写入，下次启动可见。",
       "default": true
     }
   }

@@ -3,18 +3,9 @@
 ZCode 客户端补丁工具
 =====================
 
-对本地 ZCode 安装打补丁（均自动探测安装位置、独立备份、幂等）：
+对本地 ZCode 安装打补丁（自动探测安装位置、独立备份、幂等）：
 
-一、用量页去截断（app.asar，--usage-chart）
-  设置→用量 的趋势图只画 Top6 模型、饼图只画 Top5 并把其余合并为「其他模型」。
-  补丁解析 asar 头定位渲染文件，把截断表达式替换为全量版本，
-  空格补齐到原字节长度后原地覆盖（asar 头/offset/unpacked 零改动）。
-  原始字节备份在 app.asar.chart-patch.json，可整体还原。
-
-二、模型选择弹窗加宽（app.asar，--model-width）
-  模型选择下拉浮窗 192px 扩大至 320px，长模型名完整展示不再被截断。
-
-三、TPS 统计栏（app.asar，--tps-footer）
+TPS 统计栏（app.asar，--tps-footer）
   向渲染层 out/renderer/index.html 注入 zcode-tps.js（读 ServicePort 事件流得精确
   tok/s/首 token/out；脚本内不调用 port.start()，否则 3.12.2 会卡启动）：
   输入框下方常驻统计条（默认位置），左组=本轮即时指标（首 token/tok/s/out）、
@@ -24,46 +15,21 @@ ZCode 客户端补丁工具
   重打包级修改：整体重排 asar 目录、对改动文件重算 integrity。
   原件备份 app.asar.tps.bak（带指纹 meta），记录在 app.asar.tps-patch.json，可整体还原。
 
-四、模型拉取按钮（app.asar，--model-puller）
-  设置页注入「⚡️ 自动拉取模型」按钮：拉取供应商 /models 接口 → 弹窗勾选 → 写入
-  config.json（整读整写、已有条目原样保留）。
-  四处改动：out/renderer/ 新增 zcode-model-puller.js + index.html 挂载 +
-  preload 暴露 3 个 IPC 方法（readConfigFile/writeConfigFile/fetchModelsFromUrl）+
-  main 注册 3 个 IPC handler（读写 ~/.zcode/v2/config.json、代理拉模型列表）。
-  前端脚本基于 MIT 许可的社区项目二次开发（见 NOTICE.md）；
-  preload/main 锚点用语义字符串定位，压缩符号经正则捕获，跨版本无需维护符号表。
-  原件备份 app.asar.puller.bak，记录在 app.asar.puller-patch.json，可整体还原。
-  另有命令行版 scripts/model_pull.py：不动 asar，直接同步 config.json。
-
-五、增强提示词（app.asar，--enhance-prompt）
-  在输入框工具栏注入「增强提示词」按钮：取当前草稿 → 经 preload 桥 / main handler 用
-  选定的模型调一次对话补全 → 写回输入框，按钮临时变「恢复原文」可一键还原。
-  在按钮上右键弹出模型选择菜单（按供应商分组，只列可用模型）：选中即写进
-  enhance_config.json（零重启生效、重启后沿用），本次点击同时经 override 参数走
-  explicit 档（最高优先级），文件写入失败也不会用错模型。
-  模型解析共六档：explicit → config → ref → ref-label → label → fallback。
-  提示词模板内置：保持原语言、只输出改写结果、不回答问题、不加解释。四组件注入与还原走与模型拉取按钮同一套通用链路
-  （_process_ipc_patch），preload/main 注入段按 /*zp:begin:<块名>*/ 标记定界，两者互不干扰。
-
 用法：
-  python zcode_patcher.py --all --check         # 【推荐第一步】一条命令体检全部功能，只读不改
-  python zcode_patcher.py --all                 # 一次打上全部补丁（先完全退出 ZCode）
-  python zcode_patcher.py --all --revert        # 一次还原全部补丁
-  python zcode_patcher.py --usage-chart         # 用量页去截断（同样支持 --check/--revert）
-  python zcode_patcher.py --model-width         # 模型弹窗加宽（同样支持 --check/--revert）
-  python zcode_patcher.py --tps-footer          # TPS 统计栏注入（同样支持 --check/--revert）
-  python zcode_patcher.py --model-puller        # 模型拉取按钮注入（同样支持 --check/--revert）
-  python zcode_patcher.py --enhance-prompt      # 增强提示词按钮注入（同样支持 --check/--revert）
+  python zcode_patcher.py --all --check         # 【推荐第一步】只读体检，不改任何文件
+  python zcode_patcher.py --all                 # 打上 TPS 状态栏（先完全退出 ZCode）
+  python zcode_patcher.py --all --revert        # 还原 TPS 状态栏
+  python zcode_patcher.py --tps-footer          # 同上，显式指定（支持 --check/--revert）
   python zcode_patcher.py "D:\\ZCode"           # 只处理指定安装（安装根目录或 zcode.cjs 均可）
 
 通用开关：
-  --all       对所有功能生效（等价于同时给出全部补丁参数；配合 --check / --revert 用）
-  --dry-run   只报告将要做的改动，不写盘（所有补丁通用）
+  --all       打开全部补丁（当前仅 TPS；配合 --check / --revert 用）
+  --dry-run   只报告将要做的改动，不写盘
   --force     跳过备份指纹校验（备份与当前文件对不上时强制继续，慎用）
   --verbose   打印安装探测的每一步结果（定位不到安装时用）
 
 注意：
-  * ZCode 升级会覆盖 app.asar，升级后需重新执行对应补丁；升级后首次打补丁
+  * ZCode 升级会覆盖 app.asar，升级后需重新执行补丁；升级后首次打补丁
     会自动归档旧版本的 .bak（备份带指纹），避免还原时把旧版本盖回新客户端。
   * 打完补丁完全退出并重启 ZCode 后生效；打补丁前请先完全退出 ZCode（脚本会预检）。
 """
@@ -74,7 +40,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import struct
 import subprocess
 import sys
@@ -90,10 +55,7 @@ except ImportError:                    # 被别处 import 时脚本目录可能�
 
 # 全部补丁的命令行参数名：--all 会一次性把它们打开（新增补丁时只需加进这里）
 ALL_PATCH_FLAGS = (
-    "usage_chart",
     "tps_footer",
-    "model_puller",
-    "enhance_prompt",
 )
 
 
@@ -381,1129 +343,11 @@ def resolve_target(arg: str | None) -> list[Path]:
     raise SystemExit(f"[!] 指定路径下找不到 zcode.cjs：{arg}")
 
 
-# ------------------------------------------------------- 用量页去截断补丁（asar 内同长度原地改字节）
-
-# 每项：key=定位用的文件名特征，pattern=截断表达式原文，replacement=等价短替换（空格补齐）
-USAGE_PATCHES = [
-    {
-        "key": "AppUsageDailyModelTrendChart",
-        "pattern": b"n.models.slice(0,6)",
-        "replacement": b"n.models",
-        "regex": rb"([a-zA-Z_$][a-zA-Z0-9_$]*)\.models\.slice\(0,\s*6\)",
-        "regex_replacement": lambda m: m.group(1) + b".models",
-        "desc": "每日趋势图：去掉 Top6 截断，全部模型出线",
-    },
-    {
-        "key": "AppUsageModelUsagePieChart",
-        "pattern": b"i=n.length>Q,a=i?Q-1:Q",
-        "replacement": b"i=!1,a=1/0",
-        "regex": rb"([a-zA-Z_$][a-zA-Z0-9_$]*)=([a-zA-Z_$][a-zA-Z0-9_$]*)\.length>([a-zA-Z_$][a-zA-Z0-9_$]*),([a-zA-Z_$][a-zA-Z0-9_$]*)=\1\?\3-1:\3",
-        "regex_replacement": lambda m: m.group(1) + b"=!1," + m.group(4) + b"=1/0",
-        "desc": "模型用量饼图：去掉 Top5+其他模型 合并，全部模型出块",
-    },
-]
-
-
-def _asar_header_index(asar: Path):
-    """解析 asar 头，返回 [(文件路径, 绝对偏移, 尺寸), ...]。"""
-    with open(asar, "rb") as f:
-        head = f.read(16)
-        header_size = struct.unpack("<I", head[4:8])[0]
-        json_len = struct.unpack("<I", head[12:16])[0]
-        f.seek(16)
-        header = json.loads(f.read(json_len).decode("utf-8"))
-
-    def walk(node, path):
-        for name, ent in (node.get("files") or {}).items():
-            p = f"{path}/{name}" if path else name
-            if "files" in ent:
-                yield from walk(ent, p)
-            else:
-                yield p, ent
-
-    data_start = 8 + header_size
-    return [(p, data_start + int(e["offset"]), e["size"])
-            for p, e in walk(header, "") if not e.get("unpacked")]
-
-
-def _load_sidecar(side: Path, asar_size: int | None = None) -> list[dict]:
-    """读取补丁记录；兼容旧的单条格式。带 asar_size 指纹校验：
-    ZCode 升级会整个覆盖 app.asar，旧记录的 offset 不再可信，失配即作废。"""
-    if not side.is_file():
-        return []
-    data = json.loads(side.read_text(encoding="utf-8"))
-    if isinstance(data, dict) and "patches" in data:
-        data = data["patches"]
-    elif isinstance(data, dict):
-        data = [data]
-    if asar_size is not None:
-        data = [r for r in data if r.get("asar_size") == asar_size]
-    return data
-
-
-def _asar_find_entry(header: dict, entry_path: str) -> dict | None:
-    node = header
-    for part in entry_path.split("/"):
-        files = node.get("files") or {}
-        if part not in files:
-            return None
-        node = files[part]
-    return node
-
-
-def _asar_sync_integrity(asar: Path, entry_path: str, new_bytes: bytes, *,
-                         dry_run: bool = False) -> None:
-    """同长度原地交换 asar 头里该条目的 integrity 记录，使记录与内容一致。
-    sha256 hex 定长（64），头部长度与全部 offset 零改动，保持零重打包特性。
-    实现要点：**只替换「该条目自己的 integrity 对象」那一段文本**——早期版本按哈希字符串
-    全局查找替换，当同一哈希串在头部出现两次（≤4MB 文件的整文件哈希 == 唯一块哈希，或
-    另一个内容完全相同的条目）时会误改到别的条目，此处改为整对象唯一定位。"""
-    with open(asar, "rb") as f:
-        head = f.read(16)
-        json_len = struct.unpack("<I", head[12:16])[0]
-        f.seek(16)
-        hdr = f.read(json_len)
-    ent = _asar_find_entry(json.loads(hdr.decode("utf-8")), entry_path)
-    itg = (ent or {}).get("integrity")
-    if not itg:
-        return
-    new_itg = _asar_integrity(new_bytes)
-    if itg == new_itg:
-        return
-    if len(itg.get("blocks") or []) != len(new_itg["blocks"]):
-        print(f"    [!] {entry_path} 的分块数变化，跳过 integrity 同步")
-        return
-    old_text = json.dumps(itg, separators=(",", ":")).encode()
-    new_text = json.dumps(new_itg, separators=(",", ":")).encode()
-    if len(old_text) != len(new_text):
-        print(f"    [!] {entry_path} 的 integrity 段长度变化，跳过同步")
-        return
-
-    # 定位方式①（首选）：用条目自己的 size/offset 前缀锚定，再核对紧随其后的对象文本。
-    # offset 唯一，因此这对锚点在整个头部里唯一，同内容条目也不会互相误伤。
-    pos = -1
-    try:
-        prefix = f'"size":{int(ent["size"])},"offset":"{ent["offset"]}","integrity":'.encode()
-        if hdr.count(prefix) == 1:
-            start = hdr.find(prefix) + len(prefix)
-            if hdr[start:start + len(old_text)] == old_text:
-                pos = start
-    except (KeyError, TypeError, ValueError):
-        pass
-    # 定位方式②（兜底）：整段对象文本在头部唯一
-    if pos < 0 and hdr.count(old_text) == 1:
-        pos = hdr.find(old_text)
-    if pos < 0:
-        print(f"    [!] {entry_path} 的 integrity 段无法唯一定位，跳过同步（内容已改、记录未同步）")
-        return
-    if dry_run:
-        print(f"    [~] 将同步 {entry_path} 的 integrity 记录")
-        return
-    with open(asar, "r+b") as f:
-        f.seek(16 + pos)
-        f.write(new_text)
-
-
-def process_usage_chart(asar: Path, check_only: bool, revert: bool, *,
-                        dry_run: bool = False) -> bool:
-    """用量页去截断。返回 True=成功/无需改动，False=失败。"""
-    side = asar.with_name(asar.name + ".chart-patch.json")
-    try:
-        asar_size = asar.stat().st_size
-        entries = _asar_header_index(asar)
-    except OSError as e:
-        print(f"[!] 无法读取 {asar}：{e}")
-        return False
-
-    specs = []
-    for item in USAGE_PATCHES:
-        match = [(p, o, s) for p, o, s in entries if item["key"] in p]
-        if len(match) != 1:
-            print(f"[!] {asar}\n    {item['key']} 命中 {len(match)} 个文件（期望 1），该项跳过")
-            continue
-        specs.append((item, match[0]))
-
-    try:
-        if revert:
-            saved = _load_sidecar(side, asar_size)
-            if not saved:
-                print(f"[.] {asar}\n    没有当前版本的 sidecar 备份，跳过")
-                return True
-            if dry_run:
-                print(f"[~] {asar}\n    将还原 {len(saved)} 处原始字节")
-                return True
-            with open(asar, "r+b") as f:
-                for rec in saved:
-                    f.seek(rec["offset"])
-                    f.write(base64.b64decode(rec["original_b64"]))
-            for rec in saved:
-                _asar_sync_integrity(asar, rec["path"], base64.b64decode(rec["original_b64"]))
-            side.unlink()
-            print(f"[+] {asar}\n    已还原 {len(saved)} 处原始字节")
-            return True
-
-        print(f"[*] {asar}")
-        saved = _load_sidecar(side, asar_size)
-        changed = False
-        for item, (path, off, size) in specs:
-            fname = path.split("/")[-1]
-            with open(asar, "r+b") as f:
-                f.seek(off)
-                raw = f.read(size)
-            pat = item["pattern"]
-            rep = item["replacement"]
-            if pat not in raw and "regex" in item:
-                m = re.search(item["regex"], raw)
-                if m:
-                    pat = m.group(0)
-                    rep = item["regex_replacement"](m)
-            if pat not in raw:
-                print(f"    [=] {fname} | 已打（{item['desc']}）")
-                if not check_only:
-                    _asar_sync_integrity(asar, path, raw, dry_run=dry_run)
-                continue
-            cnt = raw.count(pat)
-            if cnt != 1:
-                print(f"    [!] {fname} | 截断表达式出现 {cnt} 次（期望 1），拒绝盲改")
-                continue
-            if check_only:
-                print(f"    [ ] {fname} | 未打（{item['desc']}）")
-                continue
-            new = raw.replace(pat, rep, 1)
-            padded = new + b" " * (len(raw) - len(new))   # 同长度原地覆盖，asar 头零改动
-            if dry_run:
-                print(f"    [~] {fname} | 将替换 {pat.decode()}（{item['desc']}）")
-                changed = True
-                continue
-            if not any(r.get("offset") == off for r in saved):
-                saved.append({
-                    "path": path,
-                    "offset": off,
-                    "size": size,
-                    "asar_size": asar_size,
-                    "original_b64": base64.b64encode(raw).decode(),
-                })
-            with open(asar, "r+b") as f:
-                f.seek(off)
-                f.write(padded)
-                f.seek(off)
-                back = f.read(size)
-            ok = item["pattern"] not in back and len(back) == size
-            if ok:
-                _asar_sync_integrity(asar, path, padded)
-            print(f"    [{'+' if ok else '!'}] {fname} | {'写入成功（' + item['desc'] + '）' if ok else '写入失败'}")
-            changed = True
-        if changed and not check_only and not dry_run:
-            side.write_text(json.dumps({"patches": saved}, ensure_ascii=False), encoding="utf-8")
-            print(f"    原始字节备份: {side.name}")
-        return True
-    except OSError as e:
-        print(f"[!] {asar}\n    文件被占用或无写入权限：{e}\n"
-              f"    请完全退出 ZCode 后重试（Program Files 下需管理员终端）")
-        return False
-
-
-    try:
-        if revert:
-            saved = _load_sidecar(side, asar_size)
-            if not saved:
-                print(f"[.] {asar}\n    没有当前版本的 sidecar 备份，跳过")
-                return True
-            if dry_run:
-                print(f"[~] {asar}\n    将还原 {len(saved)} 处原始宽度字节")
-                return True
-            with open(asar, "r+b") as f:
-                for rec in saved:
-                    f.seek(rec["offset"])
-                    f.write(base64.b64decode(rec["original_b64"]))
-            for rec in saved:
-                _asar_sync_integrity(asar, rec["path"], base64.b64decode(rec["original_b64"]))
-            side.unlink()
-            print(f"[+] {asar}\n    已还原 {len(saved)} 处原始宽度字节")
-            return True
-
-        entries = _asar_header_index(asar)
-        print(f"[*] {asar}")
-        saved = _load_sidecar(side, asar_size)
-        changed = False
-
-        for item in WIDTH_PATCHES:
-            if item["key"] is not None:
-                cands = [(p, o, s) for p, o, s in entries if item["key"] in p]
-            else:
-                cands = [(p, o, s) for p, o, s in entries
-                         if p.startswith("out/renderer/") and p.endswith(".js")
-                         and s and 1000 < s < 80_000_000]
-
-            def _scan(needle: bytes):
-                got = []
-                for p, o, s in cands:
-                    with open(asar, "rb") as f:
-                        f.seek(o)
-                        raw = f.read(s)
-                    cnt = raw.count(needle)
-                    if cnt:
-                        got.append((p, o, s, raw, cnt))
-                return got
-
-            hits = _scan(item["pattern"])
-            if not hits:
-                # 未命中可能是「已打」（锚点已被替换掉）——用替换后形态确认
-                done = _scan(item["replacement"])
-                if len(done) == 1 and done[0][4] == 1:
-                    print(f"    [=] {done[0][0].split('/')[-1]} | 已打（{item['desc']}）")
-                    if not check_only:
-                        _asar_sync_integrity(asar, done[0][0], done[0][3], dry_run=dry_run)
-                    continue
-                # 或「上游已修」：3.14 起该浮窗分支改为按内容自适应宽度，长名不再截断
-                if item.get("upstream_fixed"):
-                    up = _scan(item["upstream_fixed"])
-                    if len(up) == 1 and up[0][4] == 1:
-                        print(f"    [=] {up[0][0].split('/')[-1]} | 上游已改为自适应宽度，无需补丁"
-                              f"（{item['desc']}）")
-                        continue
-                if item.get("optional"):
-                    print(f"    [.] {item['desc']} | 本版本无此补丁点（可选），跳过")
-                    continue
-                print(f"    [!] {item['desc']} | 未找到锚点（版本结构可能已变），跳过")
-                continue
-            if len(hits) > 1:
-                print(f"    [!] {item['desc']} | 锚点在 {len(hits)} 个文件中出现（期望 1），拒绝盲改")
-                continue
-            path, off, size, raw, cnt = hits[0]
-            fname = path.split("/")[-1]
-            if cnt != 1:
-                print(f"    [!] {fname} | {item['desc']}：锚点出现 {cnt} 次（期望 1），拒绝盲改")
-                continue
-
-            new = raw.replace(item["pattern"], item["replacement"], 1)
-            if len(new) != len(raw):
-                print(f"    [!] {fname} | 替换不等长（{len(raw)}→{len(new)}），拒绝改写")
-                continue
-            padded = new   # 等长，无需补齐
-            if check_only:
-                print(f"    [ ] {fname} | 未打（{item['desc']}）")
-                continue
-            if dry_run:
-                print(f"    [~] {fname} | 将替换 {item['pattern'].decode()} → "
-                      f"{item['replacement'].decode()}（{item['desc']}）")
-                changed = True
-                continue
-            if not any(r.get("offset") == off for r in saved):
-                saved.append({
-                    "path": path, "offset": off, "size": size,
-                    "asar_size": asar_size, "original_b64": base64.b64encode(raw).decode(),
-                })
-            with open(asar, "r+b") as f:
-                f.seek(off)
-                f.write(padded)
-                f.seek(off)
-                back = f.read(size)
-            ok = item["pattern"] not in back and len(back) == size
-            if ok:
-                _asar_sync_integrity(asar, path, padded)
-            print(f"    [{'+' if ok else '!'}] {fname} | {'写入成功（' + item['desc'] + '）' if ok else '写入失败'}")
-            changed = True
-
-        if changed and not check_only and not dry_run:
-            side.write_text(json.dumps({"patches": saved}, ensure_ascii=False), encoding="utf-8")
-            print(f"    原始字节备份: {side.name}")
-        return True
-    except OSError as e:
-        print(f"[!] {asar}\n    文件被占用或无写入权限：{e}\n"
-              f"    请完全退出 ZCode 后重试（Program Files 下需管理员终端）")
-        return False
-
-
 # ------------------------------------------------- TPS 统计栏注入（asar 重打包级）
 
 TPS_INDEX_PATH = "out/renderer/index.html"
 TPS_SCRIPT_PATH = "out/renderer/zcode-tps.js"
 TPS_TAG = f'<script src="./{TPS_SCRIPT_PATH.split("/")[-1]}"></script>'
-
-# ---------------------------------------- 模型拉取按钮注入（asar 重打包级，--model-puller）
-# 前端脚本基于 MIT 许可的社区项目二次开发（见 NOTICE.md）；preload 桥与 main IPC handler
-# 在此内置。锚点用语义字符串 + 正则捕获压缩符号（electron 别名 / ipcMain 包装别名），
-# 不随版本符号重排失效——等价于内核锚点的结构化提取，天然跨版本。
-
-PULLER_SCRIPT_PATH = "out/renderer/zcode-model-puller.js"
-PULLER_INDEX_PATH = TPS_INDEX_PATH
-PULLER_PRELOAD_PATH = "out/preload/index.cjs"
-PULLER_MAIN_PATH = "out/main/index.js"
-PULLER_TAG = f'<script type="module" src="./{PULLER_SCRIPT_PATH.split("/")[-1]}"></script>'
-PULLER_MARKER = b'zcode:read-model-config'
-PULLER_PRELOAD_ANCHOR = re.compile(rb'(\w+)\.contextBridge\.exposeInMainWorld\("zcode",\{')
-PULLER_MAIN_ANCHOR = re.compile(rb'(\w+)\.handle\(\w+\.SaveMcpToUserDirectory')
-
-ENHANCE_SCRIPT_PATH = "out/renderer/zcode-enhance-prompt.js"
-ENHANCE_TAG = f'<script type="module" src="./{ENHANCE_SCRIPT_PATH.split("/")[-1]}"></script>'
-ENHANCE_MARKER = b'zcode:enhance-prompt'
-
-# 注入块名（标记定界用，见下方「注入块」小节）
-MODELS_BLOCK = "zcode-models"
-ENHANCE_BLOCK = "zcode-enhance"
-
-# 旧版（无标记定界）注入段的剥离正则——只用于把已装的老版本迁移到新格式
-PULLER_PRELOAD_STRIP_LEGACY = re.compile(
-    rb'readConfigFile:\(\)=>\w+\.ipcRenderer\.invoke\("zcode:read-model-config"\),'
-    rb'writeConfigFile:t=>\w+\.ipcRenderer\.invoke\("zcode:write-model-config",t\),'
-    rb'fetchModelsFromUrl:\(t,n\)=>\w+\.ipcRenderer\.invoke\("zcode:fetch-models-from-url"\,\{baseUrl:t,apiKey:n\}\),'
-)
-PULLER_MAIN_STRIP_LEGACY = re.compile(rb'\w+\.handle\("zcode:read-model-config"')
-
-
-# ============================================================ 注入块（标记定界）
-# 每个补丁在 preload / main 里各维护一段用注释包起来的代码块：
-#     /*zp:begin:<块名>*/ …… /*zp:end:<块名>*/
-# 检测 = 取出本块内容与「重新生成的期望内容」逐字节比对；还原 = 只摘除自己的块。
-#
-# 为什么必须标记定界：preload/main 里可用的锚点各只有一个（exposeInMainWorld("zcode",{ 与
-# SaveMcpToUserDirectory），多个补丁共用同一锚点时，「从自己的首条语句一直比到锚点」这种老判定
-# 会被中间插入的其它补丁破坏 —— 表现为永远比不中、每次执行都白重写一遍、甚至重复注入。
-
-def _block_mark(block_id: str, begin: bool = True) -> bytes:
-    return f"/*zp:{'begin' if begin else 'end'}:{block_id}*/".encode()
-
-
-def _wrap_block(block_id: str, body: bytes) -> bytes:
-    return _block_mark(block_id) + body + _block_mark(block_id, False)
-
-
-def _block_span(blob: bytes, block_id: str):
-    """返回本块在 blob 里的 [start, end) 区间；不存在返回 None。"""
-    b, e = _block_mark(block_id), _block_mark(block_id, False)
-    i = blob.find(b)
-    if i < 0:
-        return None
-    j = blob.find(e, i + len(b))
-    if j < 0:
-        return None
-    return i, j + len(e)
-
-
-def _bridge_block_state(blob: bytes | None, block_id: str, want: bytes, legacy_segment=None):
-    """通用块状态：(injected, synced, clean)。
-    优先按标记块判定；没有标记块但能定位到老格式注入段时返回 (True, False, 剥离后内容)，
-    上层据此走「重新注入」把老格式迁移到标记定界格式。"""
-    if blob is None:
-        return False, False, None
-    span = _block_span(blob, block_id)
-    if span is not None:
-        i, j = span
-        return True, blob[i:j] == want, blob[:i] + blob[j:]
-    if legacy_segment is not None:
-        seg = legacy_segment(blob)
-        if seg is not None:
-            i, j = seg
-            return True, False, blob[:i] + blob[j:]
-    return False, False, blob
-
-
-# ------------------------------------------------------------ 模型拉取按钮的注入块
-
-def _models_preload_block(electron_alias: str) -> bytes:
-    """exposeInMainWorld("zcode",{ 对象字面量里插入 3 个 IPC 桥方法。
-    不依赖压缩 helper：contextBridge 对普通箭头函数无要求。"""
-    e = electron_alias
-    body = (
-        f'readConfigFile:()=>{e}.ipcRenderer.invoke("zcode:read-model-config"),'
-        f'writeConfigFile:t=>{e}.ipcRenderer.invoke("zcode:write-model-config",t),'
-        f'fetchModelsFromUrl:(t,n)=>{e}.ipcRenderer.invoke("zcode:fetch-models-from-url",'
-        f'{{baseUrl:t,apiKey:n}}),'
-    ).encode()
-    return _wrap_block(MODELS_BLOCK, body)
-
-
-def _models_preload_state(blob: bytes | None):
-    """(injected, synced, clean, alias)。"""
-    if blob is None:
-        return False, False, None, None
-    a = PULLER_PRELOAD_ANCHOR.search(blob)
-    if a is None:
-        return False, False, None, None
-    alias = a.group(1).decode()
-
-    def legacy(b: bytes):
-        m = PULLER_PRELOAD_STRIP_LEGACY.search(b)
-        return (m.start(), m.end()) if m else None
-
-    inj, synced, clean = _bridge_block_state(blob, MODELS_BLOCK,
-                                             _models_preload_block(alias), legacy)
-    return inj, synced, clean, alias
-
-
-def _models_main_state(blob: bytes | None):
-    if blob is None:
-        return False, False, None, None
-    a = PULLER_MAIN_ANCHOR.search(blob)
-    if a is None:
-        return False, False, None, None
-    alias = a.group(1).decode()
-
-    def legacy(b: bytes):
-        m = PULLER_MAIN_STRIP_LEGACY.search(b)
-        if m is None or m.start() >= a.start():
-            return None
-        # 老格式注入段以换行开头（read_h 模板首字符），剥离时要算进去
-        start = m.start() - 1 if m.start() > 0 and b[m.start() - 1:m.start()] == b"\n" else m.start()
-        return (start, a.start())
-
-    inj, synced, clean = _bridge_block_state(blob, MODELS_BLOCK,
-                                             _models_main_block(alias), legacy)
-    return inj, synced, clean, alias
-
-
-def _enhance_preload_state(blob: bytes | None):
-    if blob is None:
-        return False, False, None, None
-    a = PULLER_PRELOAD_ANCHOR.search(blob)
-    if a is None:
-        return False, False, None, None
-    alias = a.group(1).decode()
-    inj, synced, clean = _bridge_block_state(blob, ENHANCE_BLOCK, _enhance_preload_block(alias))
-    return inj, synced, clean, alias
-
-
-def _enhance_main_state(blob: bytes | None):
-    if blob is None:
-        return False, False, None, None
-    a = PULLER_MAIN_ANCHOR.search(blob)
-    if a is None:
-        return False, False, None, None
-    alias = a.group(1).decode()
-    inj, synced, clean = _bridge_block_state(blob, ENHANCE_BLOCK, _enhance_main_block(alias))
-    return inj, synced, clean, alias
-
-
-def _models_main_block(ipc_alias: str) -> bytes:
-    """在 ipcMain 别名的 SaveMcpToUserDirectory 注册语句前插入 3 个 handler。
-    3.14.x 起界面供应商列表真正读写 <dataBaseDir>/.zcode/v2/provider_config.json
-    （schemaVersion 1：providerRules.personalModelIds/modelOrder + providerModelRules），
-    config.json 仅存模型元数据；dataBaseDir 从 ~/.zcode/v2/setting.json 读出（与应用
-    bootstrap 同逻辑）。故：读时把 provider_config 合并成旧格式视图（personalModelIds
-    为唯一事实源），写时同时回写 provider_config 与 config.json。"""
-    h = ipc_alias
-    read_h = r'''
-__H__.handle("zcode:read-model-config",async()=>{
-try{
-let{default:e}=await import("node:fs"),{default:t}=await import("node:path"),{default:n}=await import("node:os");
-let base=n.homedir();
-try{let s=JSON.parse(e.readFileSync(t.join(base,".zcode","v2","setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())base=s.dataBaseDir.trim()}catch(_){}
-let root=t.join(base,".zcode","v2");
-let cfg={provider:{}};
-try{let d=JSON.parse(e.readFileSync(t.join(root,"config.json"),"utf-8"));
-if(d&&typeof d=="object"&&!Array.isArray(d))cfg=d}catch(_){}
-if(!cfg.provider||typeof cfg.provider!="object"||Array.isArray(cfg.provider))cfg.provider={};
-let legacy={};
-try{legacy=JSON.parse(e.readFileSync(t.join(root,"provider_config.json"),"utf-8"))}catch(_){}
-let rules=(legacy&&legacy.config&&legacy.config.providerConfigRules&&legacy.config.providerConfigRules.providerRules)||[];
-let kt=(y)=>/anthropic/i.test(String(y))?"anthropic":(/responses/i.test(String(y))?"openai":"openai-compatible");
-// 以 provider_config.json 的 rules 为唯一有效准绳，彻底剔除已在界面被用户删除的幽灵条目
-let validPids=new Set(rules.map(r=>r&&r.providerId).filter(Boolean));
-if(rules.length>0){
-for(let k0 of Object.keys(cfg.provider||{})){
-if(String(k0).startsWith("builtin:"))continue;
-if(!validPids.has(k0)){
-delete cfg.provider[k0];
-}
-}
-}
-for(let rule of rules){
-let pid=rule&&rule.providerId;
-if(!pid)continue;
-let c=rule.config||{},api=c.api||{};
-let old=cfg.provider[pid];
-if(!old||typeof old!="object"||Array.isArray(old))old=cfg.provider[pid]={};
-old.name=rule.providerName||old.name||pid;
-if(api.type)old.kind=kt(api.type);
-else if(!old.kind)old.kind="openai-compatible";
-old.source="custom";
-let opts=(old.options&&typeof old.options=="object"&&!Array.isArray(old.options))?old.options:(old.options={});
-if(api.baseUrl)opts.baseURL=api.baseUrl;
-// 模型状态以 provider_config.json 为准：剔除在界面已被删除的孤儿模型
-let ids=Array.isArray(c.personalModelIds)?c.personalModelIds:[];
-let validMids=new Set(ids.map(x=>String(x).trim()).filter(Boolean));
-let models=(old.models&&typeof old.models=="object"&&!Array.isArray(old.models))?old.models:(old.models={});
-for(let m0 of Object.keys(models)){
-if(!validMids.has(m0))delete models[m0];
-}
-for(let id0 of ids){
-if(typeof id0!="string")continue;
-let id=id0.trim();
-if(!id||models[id])continue;
-models[id]={limit:{context:1000000,output:128000},modalities:{input:["text","image"],output:["text"]},zcode:{modalitiesConfigured:!0,modified:!0}}
-}
-}
-// 不回传 apiKey：渲染层只需要 baseURL 与模型名；写回时由主进程保留磁盘上的原 Key
-for(let p of Object.values(cfg.provider)){
-if(p&&p.options&&typeof p.options=="object")delete p.options.apiKey;
-}
-return{success:!0,data:cfg}
-}catch(e){return{success:!1,error:String(e)}}});
-'''.replace("__H__", h)
-    write_h = r'''
-__H__.handle("zcode:write-model-config",async(e,payload)=>{
-try{
-if(typeof payload!="object"||payload===null)throw new Error("invalid config payload");
-let t=(payload.config&&typeof payload.config=="object")?payload.config:payload;
-let targetPid=payload.targetPid||payload.__targetPid||t.__targetPid||null;
-let targetBaseUrl=payload.targetBaseUrl||payload.__targetBaseUrl||t.__targetBaseUrl||null;
-let{default:n}=await import("node:fs"),{default:r}=await import("node:path"),{default:i}=await import("node:os");
-let base=i.homedir();
-try{let s=JSON.parse(n.readFileSync(r.join(base,".zcode","v2","setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())base=s.dataBaseDir.trim()}catch(_){}
-let root=r.join(base,".zcode","v2");
-let o=r.join(root,"config.json");
-let pcPath=r.join(root,"provider_config.json");
-let pc={};
-try{pc=JSON.parse(n.readFileSync(pcPath,"utf-8"))}catch(_){}
-if(!pc||typeof pc!="object"||Array.isArray(pc))pc={schemaVersion:1,config:{}};
-pc.schemaVersion=pc.schemaVersion||1;
-pc.config=pc.config||{};
-let pcr=pc.config.providerConfigRules=pc.config.providerConfigRules||{};
-let rules=Array.isArray(pcr.providerRules)?pcr.providerRules:(pcr.providerRules=[]);
-let mcr=pc.config.modelConfigRules=pc.config.modelConfigRules||{};
-let mrules=Array.isArray(mcr.providerModelRules)?mcr.providerModelRules:(mcr.providerModelRules=[]);
-let byId={};
-for(let rule of rules){if(rule&&rule.providerId)byId[rule.providerId]=rule}
-let kt=(y)=>/anthropic/i.test(String(y))?"anthropic-messages":(/responses/i.test(String(y))?"openai-responses":"openai-chat-completions");
-let norm=(u)=>String(u||"").trim().replace(/\/+$/,"").replace(/\/v1$/,"");
-let cleanTargetUrl=norm(targetBaseUrl);
-
-// 渲染层不回传 apiKey（读接口已脱敏）：条目缺 apiKey 时保留磁盘上的原值；
-// 核心修复：彻底剔除不在 rules 且非当前操作目标的幽灵条目，绝不因含有模型而残留！
-try{
-let prev={};try{prev=JSON.parse(n.readFileSync(o,"utf-8"))}catch(_){}
-for(let pid of Object.keys(t.provider||{})){
-if(String(pid).startsWith("builtin:"))continue;
-let np=t.provider[pid],op=prev&&prev.provider?prev.provider[pid]:null;
-if(!np||typeof np!="object"){delete t.provider[pid];continue}
-let bu=norm(np.options&&np.options.baseURL);
-let isTarget=(targetPid&&pid===targetPid)||(cleanTargetUrl&&bu&&bu===cleanTargetUrl);
-let hasRule=!!byId[pid];
-if(!hasRule&&bu){
-for(let r2 of rules){let u=norm(r2&&r2.config&&r2.config.api&&r2.config.api.baseUrl);if(u&&u===bu){hasRule=!0;break}}
-}
-if(!hasRule&&!isTarget){
-delete t.provider[pid];
-continue;
-}
-if(!np.options||typeof np.options!="object")np.options={};
-if(!np.options.apiKey&&op&&op.options&&op.options.apiKey)np.options.apiKey=op.options.apiKey;
-}
-}catch(_){}
-
-// 备份只在首次创建时写：否则第二次保存会把"已改过的版本"当备份，失去回滚意义
-if(!n.existsSync(o+".puller-bak"))try{n.writeFileSync(o+".puller-bak",n.readFileSync(o,"utf-8"))}catch(a){}
-let tmpCfg=o+".tmp";
-n.writeFileSync(tmpCfg,JSON.stringify(t,null,2),"utf-8");
-n.renameSync(tmpCfg,o);
-
-try{
-for(let ent0 of Object.entries(t.provider||{})){
-let pid=ent0[0],pdata=ent0[1];
-if(!pdata||typeof pdata!="object")continue;
-if(String(pid).startsWith("builtin:"))continue;
-let models=pdata.models||{};
-let ids=Object.keys(models);
-let rule=byId[pid];
-let bu=norm(pdata.options&&pdata.options.baseURL);
-if(!rule&&bu){
-for(let r2 of rules){let u=norm(r2&&r2.config&&r2.config.api&&r2.config.api.baseUrl);if(u&&u===bu){rule=r2;break}}
-}
-let isTarget=(targetPid&&pid===targetPid)||(cleanTargetUrl&&bu&&bu===cleanTargetUrl);
-// 严格限制：只有当前正在操作的目标供应商，且存在有效模型时，才允许为全新供应商创建 rule，严禁自动复活任何已删除条目
-if(!rule){
-if(isTarget&&ids.length>0){
-rule={providerId:pid,providerName:pdata.name||pid,config:{group:"standard-personal",access:{type:"api-key"},api:{type:kt(pdata.kind||"")},personalModelIds:[],modelOrder:[]}};
-rules.push(rule);
-byId[pid]=rule;
-}else{
-continue;
-}
-}
-
-let c=rule.config=rule.config||{};
-c.group=c.group||"standard-personal";
-c.access=c.access||{type:"api-key"};
-if(pdata.options&&pdata.options.apiKey)c.access.apiKey=pdata.options.apiKey;
-c.api=c.api||{};
-if(pdata.options&&pdata.options.baseURL)c.api.baseUrl=pdata.options.baseURL;
-if(pdata.kind)c.api.type=kt(pdata.kind);
-// 保序：既有顺序保留、新模型追加末尾（整体覆盖会打乱用户在界面里排好的顺序）
-let oldOrder=Array.isArray(c.modelOrder)?c.modelOrder.filter(function(x){return ids.indexOf(x)>=0}):[];
-c.personalModelIds=oldOrder.concat(ids.filter(function(x){return oldOrder.indexOf(x)<0}));
-c.modelOrder=c.personalModelIds.slice();
-let oldRules={},keep=[];
-let manual=new Set();
-let manualArr=(pc.config&&pc.config.modelConfigRules&&pc.config.modelConfigRules.manualProviderModelRules)||[];
-for(let m of manualArr){
-if(m&&m.modelId)manual.add(m.providerId+"/"+m.modelId)
-}
-for(let m of mrules){
-if(m&&m.providerId===pid){oldRules[m.modelId]=m;continue}
-keep.push(m)
-}
-for(let mid of ids){
-if(oldRules[mid]&&!manual.has(pid+"/"+mid)){keep.push(oldRules[mid]);continue}
-if(manual.has(pid+"/"+mid))continue;
-let ent=models[mid]||{};
-keep.push({modelId:mid,providerId:pid,config:{properties:{contextWindow:(ent.limit&&ent.limit.context)||1000000}}})
-}
-mrules.length=0;
-for(let m of keep)mrules.push(m)
-}
-if(!n.existsSync(pcPath+".puller-bak"))try{n.writeFileSync(pcPath+".puller-bak",n.readFileSync(pcPath,"utf-8"))}catch(a2){}
-let tmpPc=pcPath+".tmp";
-n.writeFileSync(tmpPc,JSON.stringify(pc,null,2),"utf-8");
-n.renameSync(tmpPc,pcPath);
-}catch(syncErr){return{success:!0,warn:"config.json written; provider_config.json sync failed: "+String(syncErr)}}
-return{success:!0}}
-catch(n){return{success:!1,error:String(n)}}});
-'''.replace("__H__", h)
-    fetch_h = (
-        f'{h}.handle("zcode:fetch-models-from-url",async(e,t)=>{{'
-        'try{let{default:ht}=await import("node:https"),{default:hh}=await import("node:http");'
-        'let u=(t&&t.baseUrl||"").trim().replace(/\\/+$/,""),k=(t&&t.apiKey||"").trim();'
-        'if(!u)return{success:!1,error:"baseUrl 为空"};'
-        'let cs=[];'
-        'if(u.endsWith("/v1")){cs.push(u+"/models");cs.push(u.replace(/\\/v1$/,"")+"/models")}'
-        'else{cs.push(u+"/v1/models");cs.push(u+"/models")}'
-        'if(u.endsWith("/api"))cs.unshift(u+"/v1/models");'
-        'for(let cur of cs){'
-        'try{let res=await new Promise(resolve=>{'
-        'let mod=cur.startsWith("https:")?ht:hh;'
-        'let hs={"User-Agent":"ZCode","Accept":"application/json"};'
-        'if(k){hs.Authorization="Bearer "+k;hs["x-api-key"]=k}'
-        'let req=mod.request(cur,{method:"GET",headers:hs,timeout:8000},r=>{'
-        'let b="";r.on("data",c=>b+=c);'
-        'r.on("end",()=>{'
-        'if(r.statusCode>=200&&r.statusCode<300){try{'
-        'let j=JSON.parse(b);'
-        'let l=Array.isArray(j)?j:Array.isArray(j.data)?j.data:Array.isArray(j.models)?j.models:[];'
-        'let ids=[],metas={};'
-        'for(let it of l){let id,ctx=0,out=0,eff=null,def=null;'
-        'if(typeof it=="string")id=it.trim();'
-        'else if(it){id=(it.id||it.name||"").trim();'
-        'ctx=+it.context_length||+it.max_input_tokens||0;'
-        'out=+it.max_output_tokens||+it.max_completion_tokens||+(it.top_provider?it.top_provider.max_completion_tokens:0)||0;'
-        'if(Array.isArray(it.supported_efforts))eff=it.supported_efforts.filter(x=>typeof x=="string"&&x.trim());'
-        'if(typeof it.default_effort=="string")def=it.default_effort;}'
-        'if(id&&!metas[id]){metas[id]={context:ctx,output:out,efforts:eff,def:def};ids.push(id)}}'
-        'if(ids.length>0)return resolve({success:!0,models:ids,metas:metas})'
-        '}catch(e){}}'
-        'resolve(null)})});'
-        'req.on("error",()=>resolve(null));'
-        'req.on("timeout",()=>{req.destroy();resolve(null)});'
-        'req.end()});'
-        'if(res&&res.success)return res'
-        '}catch(e){}}'
-        'return{success:!1,error:"未能获取到模型列表，请检查 Base URL 和 API Key"}}'
-        'catch(e){return{success:!1,error:String(e)}}});\n'
-    )
-    return _wrap_block(MODELS_BLOCK, (read_h + write_h + fetch_h).encode())
-
-
-# ------------------------------------------------------------ 增强提示词的注入块
-
-def _enhance_preload_block(electron_alias: str) -> bytes:
-    """暴露 3 个桥方法：
-      enhancePrompt(text, modelValue, modelLabel, override)
-        —— override = {providerId, modelId}，右键菜单选中的模型，本次请求最高优先级；
-      listEnhanceModels()  —— 走同一通道取 {list:true}，回可用供应商+模型清单；
-      saveEnhanceModel(o)  —— 把选择持久化进 enhance_config.json（零重启生效）。
-    """
-    e = electron_alias
-    body = (f'enhancePrompt:(t,n,o,ov)=>{e}.ipcRenderer.invoke("zcode:enhance-prompt",'
-            f'{{text:t,modelValue:n,modelLabel:o,override:ov}}),'
-            f'listEnhanceModels:()=>{e}.ipcRenderer.invoke("zcode:enhance-prompt",{{list:!0}}),'
-            f'saveEnhanceModel:o=>{e}.ipcRenderer.invoke("zcode:enhance-model-save",o),').encode()
-    return _wrap_block(ENHANCE_BLOCK, body)
-
-
-def _enhance_main_block(ipc_alias: str) -> bytes:
-    """在 ipcMain 别名的 SaveMcpToUserDirectory 前插入「增强提示词」相关 handler：
-      ① zcode:enhance-prompt      —— 用指定模型（explicit/config/ref/… 六档解析）调一次补全；
-                                     传 {list:true} 时只回可用模型清单（右键菜单用）。
-      ② zcode:enhance-model-save  —— 把右键菜单选中的供应商/模型持久化进 enhance_config.json，
-                                     使后续点击（乃至重启后）默认沿用该模型。
-    提示词与 WorkBuddy 的 input.enhance 功能同源。"""
-    body = (_ENHANCE_HANDLER
-            .replace("__H__", ipc_alias)
-            .replace("__SYS__", json.dumps(_ENHANCE_SYSTEM_PROMPT, ensure_ascii=False))
-            .replace("__TPL__", json.dumps(_ENHANCE_USER_TEMPLATE, ensure_ascii=False)))
-    body += "\n" + _ENHANCE_SAVE_HANDLER.replace("__H__", ipc_alias)
-    return _wrap_block(ENHANCE_BLOCK, body.encode())
-
-
-_ENHANCE_SYSTEM_PROMPT = """You are a Prompt Engineering Expert specializing in improving user prompts for a development code assistant. Analyze the given prompt and produce a more effective version while keeping its core purpose.
-RULES:
-1. Language matching is the highest priority: reply in exactly the same language as the user's input (Chinese stays Chinese, English stays English, mixed stays mixed).
-2. Keep the enhanced prompt concise (roughly under 800 characters).
-3. Do NOT answer the request, do NOT explain how, do NOT add guides, do NOT suggest specific technologies unless the user mentioned them.
-4. Output only the enhanced prompt — no preface, no commentary, no markdown fences."""
-
-_ENHANCE_USER_TEMPLATE = """USER INPUT:
-{input}
-
-TASK:
-Rewrite the user input into a clearer, more specific prompt for the target AI assistant. Preserve intent, topic, constraints and expected output type.
-CRITICAL - LANGUAGE CONSISTENCY: write the enhanced prompt in the same language as the user input; never include language analysis or language labels in the output.
-REQUIREMENTS: return only the enhanced prompt text; make a substantive enhancement (clarify task, scope, constraints, expected output); if it is already clear, lightly polish it; keep it complete and concise (no dangling list or trailing colon)."""
-
-_ENHANCE_HANDLER = '''
-__H__.handle("zcode:enhance-prompt",async(ev,t)=>{
-try{
-let{default:n}=await import("node:fs"),{default:r}=await import("node:path"),{default:i}=await import("node:os");
-// 注意：主进程 bundle 是 ESM（package.json type=module），**没有 require**——
-// 取 Node 内置模块必须用动态 import（与 zcode:fetch-models-from-url 的写法保持一致）。
-let{default:httpsMod}=await import("node:https"),{default:httpMod}=await import("node:http");
-let base=i.homedir();
-try{let s=JSON.parse(n.readFileSync(r.join(base,".zcode","v2","setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())base=s.dataBaseDir.trim()}catch(_){}
-let root=r.join(base,".zcode","v2");
-// ============================================================
-// 供应商凭据的唯一权威来源是 provider_config.json（客户端自己就是从这里发请求的）。
-// config.json 里的 provider.options 是**旧格式**：官方设置页现在写 provider_config.json，
-// config.json 可能停在很久以前（本机实测：key 不同、模型列表不同、端点数不同）。
-// 旧实现只读 config.json → 界面选的模型在那里可能压根不存在 → 解析失败 → 400。
-// 因此这里先把 provider_config.json 归一化成统一的候选表，必要时再用 config.json 补缺。
-// ============================================================
-function rd(p){try{return JSON.parse(n.readFileSync(p,"utf-8"))}catch(_){return null}}
-// ⓪ 增强专用热配置 <root>/enhance_config.json：每次点击都重新读取，改文件即生效、无需重启。
-//   providerId/modelId 留空或文件不存在时，行为与旧版完全一致（用界面当前选中的模型）。
-let cfg=rd(r.join(root,"enhance_config.json"))||{};
-let srcTried=[];
-// ① provider_config.json（权威）→ 归一化
-let pcCands=[];
-try{
-let p=d=>d&&d.config?d.config:d;
-let pc=p(rd(r.join(root,"provider_config.json")));
-if(pc){
-let rules=((pc.providerConfigRules||{}).providerRules)||[];
-// api.type → 本 handler 使用的 kind
-function zkind(t){
-t=String(t||"").toLowerCase();
-if(t.indexOf("anthropic")>=0)return"anthropic";
-if(t.indexOf("openai")>=0||t.indexOf("chat-completions")>=0||t.indexOf("responses")>=0)return"openai-compatible";
-return"openai-compatible"}
-let pm={};
-for(let r2 of ((pc.modelConfigRules||{}).providerModelRules)||[]){
-let pid2=String(r2.providerId||"");if(!pid2)continue;
-(pm[pid2]=pm[pid2]||[]).push(String(r2.modelId||""))}
-for(let r2 of rules){
-let pid2=String(r2.providerId||"");if(!pid2)continue;
-let c=r2.config||{},acc=c.access||{},api=c.api||{};
-let ids=[].concat(c.personalModelIds||[],pm[pid2]||[]),models={};
-for(let id of ids){let s2=String(id||"").trim();if(s2&&!models[s2])models[s2]={name:s2}}
-pcCands.push({pid:pid2,p:{name:r2.providerName,kind:zkind(api.type),models:models,
-options:{baseURL:String(api.baseUrl||""),apiKey:String(acc.apiKey||"")}},name:String(r2.providerName||"")})}
-srcTried.push("provider_config.json:"+pcCands.length)}}catch(_){srcTried.push("provider_config.json:err")}
-// ② config.json 的 provider（旧格式）→ 归一化成同一形状；已被 ① 覆盖的 providerId 跳过
-let cfgCands=[];
-try{let d=rd(r.join(root,"config.json"));
-for(let ent of Object.entries((d&&d.provider)||{})){
-let pid2=ent[0],pp=ent[1];
-if(!pp||typeof pp!="object")continue;
-cfgCands.push({pid:pid2,p:pp,name:String(pp.name||"")})}
-srcTried.push("config.json:"+cfgCands.length)}catch(_){srcTried.push("config.json:err")}
-// 合并：① 优先，缺失的用 ②（config.json 的 options.baseURL/apiKey 是显式的，作为回退）
-let seen={};
-for(let c of pcCands)seen[c.pid]=1;
-let all=pcCands.slice();
-for(let c of cfgCands){if(seen[c.pid])continue;all.push(c);seen[c.pid]=1}
-let byId={};for(let c of all)byId[c.pid]=c;
-// ============================================================
-// 「列出可用模型」模式（右键菜单用）：与 enhance-prompt **同一通道、同一份候选表**。
-// 传 {list:true} 时只回候选表、不发任何补全请求 —— 这样菜单的模型清单与真正发请求时
-// 用的候选表**永远同源**，不会出现「菜单里能选、点了却报不可用」的两套逻辑漂移。
-// 只列 usable() 的供应商：列出来点了也只会撞 400/401，不如不显示。
-// ============================================================
-if(t&&t.list){
-let groups=[];
-for(let c of all){
-if(!usable(c.p))continue;
-let ms=[],mm=(c.p||{}).models||{};
-for(let mid of Object.keys(mm))ms.push({id:mid,name:String((mm[mid]||{}).name||mid)});
-groups.push({providerId:c.pid,name:String(c.name||c.pid),models:ms})}
-let cur=null;
-let cpid=String(cfg.providerId||"").trim(),cmid=String(cfg.modelId||"").trim();
-if(cpid&&cmid)cur={providerId:cpid,modelId:cmid};
-return{success:!0,groups:groups,current:cur}}
-let text=String((t&&t.text)||"").trim();
-if(!text)return{success:!1,code:"empty",error:"输入框是空的"};
-let mv=String((t&&t.modelValue)||"").trim();
-let ml=String((t&&t.modelLabel)||"").trim().toLowerCase();
-let pick=null,how="",tried=[];
-// 候选必须「有 baseURL + 有 apiKey」——否则必然是 400/401
-function usable(pp){
-if(!pp||typeof pp!="object")return!1;
-if(pp.systemDisabledReason)return!1;
-let o=pp.options||{};
-return !!String(o.baseURL||"").trim()&&!!String(o.apiKey||"").trim()}
-function baseOf(pid){let c=byId[pid];return c?String(((c.p||{}).options||{}).baseURL||"").replace(/\\/+$/,""):""}
-function modelsOf(pid){let c=byId[pid];return c?((c.p||{}).models||{}):{}}
-function cand(pid,mid,n){
-tried.push(n+":"+pid+"/"+mid+(usable((byId[pid]||{}).p)?"":"(跳过:不可用)"));
-if(!byId[pid]||!usable(byId[pid].p))return null;
-return{pid:pid,mid:mid,p:byId[pid].p,how:n,name:(byId[pid].name||"")}}
-// ★ 显式指定（右键菜单里刚选中的模型，随本次请求一起传）—— **最高优先级**：
-//    压过热配置档与界面选择。用户刚在菜单里点过它，这一次点击就必须用它。
-//    与 ⓪ 档同口径：只校验供应商可用性，不校验模型表（允许中转站模型变体名）。
-//    ★ 必须带 !pick 守卫：否则下面的 ⓪ 档会把它覆盖掉（同款历史 bug，见 ⓪ 档注释）。
-if(!pick&&t&&t.override&&String(t.override.providerId||"").trim()&&String(t.override.modelId||"").trim()){
-let opid=String(t.override.providerId).trim(),omid=String(t.override.modelId).trim();
-if(byId[opid]&&usable(byId[opid].p)){let oc=cand(opid,omid,"explicit");if(oc)pick=oc}}
-// ⓪ 用户在 enhance_config.json 里显式指定的供应商+模型 —— 次高优先级。
-//    只要求供应商可用（key/baseURL 齐全），不校验模型表：允许发表里没有、
-//    但中转站实际支持的模型名（也是自定义思考强度模型变体的入口）。
-//    ★ 必须带 !pick 守卫：右键菜单的 explicit 档在它前面，缺守卫就会把 explicit 覆盖掉。
-if(!pick&&cfg&&String(cfg.providerId||"").trim()&&String(cfg.modelId||"").trim()){
-let cpid=String(cfg.providerId).trim(),cmid=String(cfg.modelId).trim();
-let cp=byId[cpid];
-if(cp&&usable(cp.p)){pick=cand(cpid,cmid,"config")}}
-// ① 界面直接给的 ref（providerId/modelId）——最准
-//    ★ 必须带 !pick 守卫：否则界面选择一旦可读，就会把上面 ⓪ 热配置档覆盖掉，
-//      使「enhance_config.json 指哪打哪」只在界面取值失灵时才生效（自相矛盾）。
-//      ②③ 两档本来就有 !pick，这里补齐才与它们一致。
-// ① 界面直接给的 ref（providerId/modelId）——最准
-if(!pick&&mv){let k=mv.indexOf("/");
-if(k>0){let pid=mv.slice(0,k),mid=mv.slice(k+1);
-if(modelsOf(pid)[mid]){let c=cand(pid,mid,"ref");if(c)pick=c}
-else if(byId[pid]&&usable(byId[pid].p)){let c=cand(pid,mid,"ref");if(c)pick=c}}}
-// ② 按 ref 的 providerId + 界面显示名，在该供应商内部定位模型
-//    （ref 里的 modelId 与配置键不一致时，这一档能救回来）
-if(!pick&&mv&&ml){let k=mv.indexOf("/");
-if(k>0){let pid=mv.slice(0,k);
-for(let mid of Object.keys(modelsOf(pid))){
-let mm=modelsOf(pid)[mid]||{};
-let names=[mid,mm.name,pid+"/"+mid];
-for(let c2 of names){
-if(c2&&String(c2).trim().toLowerCase()===ml){let c=cand(pid,mid,"ref-label");if(c)pick=c;break}}
-if(pick)break}}}
-
-// ③ 全表按显示名反查（不限自定义：内置供应商只要能读到 key 也应该能用；纯 modelId 亦可定位）
-let targetName=ml||(mv&&mv.indexOf("/")<0?mv.toLowerCase():"");
-if(!pick&&targetName){
-for(let c of all){
-let pid=c.pid,pp=c.p;
-if(!pp||typeof pp!="object")continue;
-for(let mid of Object.keys(pp.models||{})){
-let mm=pp.models[mid]||{};
-let names=[mid,mm.name,pid+"/"+mid];
-for(let c3 of names){
-if(c3&&String(c3).trim().toLowerCase()===targetName){let cc=cand(pid,mid,"label");if(cc)pick=cc;break}}
-if(pick)break}
-if(pick)break}}
-// ④ 末档兜底：界面没给出任何可用线索时，才用第一个真正可用的供应商
-//    注意只在本轮**同一份候选表**里挑，且内置（builtin:/account:）供应商排在最后——
-//    它们要么没有 key，要么归属他人的套餐，优先选会再次踩到 400。
-if(!pick){
-let ordered=all.slice().sort(function(a,b){
-let za=/^(builtin:|account:)/.test(a.pid)?1:0,zb=/^(builtin:|account:)/.test(b.pid)?1:0;
-return za-zb});
-for(let c of ordered){
-let mid=Object.keys(c.p.models||{})[0];
-if(!mid)continue;
-let cc=cand(c.pid,mid,"fallback");if(cc){pick=cc;break}}}
-if(!pick){
-let why=String((t&&t.modelValue)||"").trim()||ml;
-return{success:!1,code:"no-model",error:why
-?("界面所选模型「"+why+"」不可用：它所属的供应商缺少 API Key / Base URL，或套餐未生效（"+(tried.slice(0,3).join("; ")||"无候选")+"）。请在设置里换一个已配置好的模型，或补全该供应商的凭据")
-:("没有可用的模型：请先在设置里配置供应商与 API Key"),sources:srcTried}}
-let u=String(pick.p.options.baseURL||"").replace(/\\/+$/,"");
-let k=String(pick.p.options.apiKey||"");
-if(!u)return{success:!1,code:"no-baseurl",error:"供应商「"+pick.pid+"」没有填 Base URL"};
-if(!k)return{success:!1,code:"no-key",error:"供应商「"+pick.pid+"」没有填 API Key"};
-// 把命中档位带到返回值：cand() 已把档名存在 pick.how（config/ref/ref-label/label/fallback）。
-// 排障时 `window.__zenhanceDiag.lastResult.how` 靠它判断走的是哪一档 —— 不赋值会恒为空串。
-how=String(pick.how||"");
-let kind=String(pick.p.kind||"openai-compatible");
-let sys=__SYS__,tpl=__TPL__;
-let user=tpl.split("{input}").join(text);
-// 热配置参数：maxTokens / temperature / 思考强度（reasoningEffort 或 thinkingBudget）
-let cfgMax=Math.max(256,Number(cfg.maxTokens)||2048);
-let cfgTemp=(cfg.temperature==null||isNaN(Number(cfg.temperature)))?0.3:Number(cfg.temperature);
-let re=String(cfg.reasoningEffort||"").trim().toLowerCase();
-let tb=Number(cfg.thinkingBudget)||0;
-
-// —— 错误分类 + 重试策略 ——
-function classify(code,status,msg){
-let m=String(msg||"").toLowerCase();
-if(/model is unavailable|model_not_found|not found|unknown model|no such model|not available|not supported/.test(m))
-return{kind:"model",retry:!1,tip:"该供应商不支持此模型或未开通（实测可用 enhance_config.json 指定其它供应商/模型）。请检查模型名称与套餐，或换一个供应商"};
-if(/insufficient|balance|quota|exceeded|充值|余额/.test(m))
-return{kind:"quota",retry:!1,tip:"额度或余额不足，请充值或切换供应商"};
-if(/invalid[_ ]?api[_ ]?key|unauthorized|authentication|token|鉴权|令牌/.test(m)||status===401||status===403)
-return{kind:"auth",retry:!1,tip:"API Key 无效、过期或无权限（注意密钥可能必须来自该 endpoint 的同源账号）"};
-if(status===404)return{kind:"path",retry:!0,tip:"接口路径可能不对（baseURL 是否需要 /v1）"};
-if(status===429)return{kind:"rate",retry:!0,tip:"触发限流，稍后重试即可"};
-if(status>=500)return{kind:"server",retry:!0,tip:"供应商侧故障，稍后重试"};
-if(status===400)return{kind:"bad-request",retry:!1,tip:"请求被上游拒绝（模型名称/参数/协议类型不匹配）"};
-if(code==="timeout")return{kind:"timeout",retry:!0,tip:"网络超时，请检查代理或稍后重试"};
-if(code==="network")return{kind:"network",retry:!0,tip:"无法连接供应商，请检查网络与代理设置"};
-return{kind:"other",retry:!!(code!=="http"),tip:""}}
-
-async function requestModel(curPick){
-let curU=String(curPick.p.options.baseURL||"").replace(/\\/+$/,"");
-let curK=String(curPick.p.options.apiKey||"");
-if(!curU)return{success:!1,code:"no-baseurl",error:"供应商「"+curPick.pid+"」没有填 Base URL"};
-if(!curK)return{success:!1,code:"no-key",error:"供应商「"+curPick.pid+"」没有填 API Key"};
-let curKind=String(curPick.p.kind||"openai-compatible");
-let cs=[],curBody;
-let curHeaders={"Content-Type":"application/json","Accept":"application/json",Authorization:"Bearer "+curK,"x-api-key":curK};
-if(curKind==="anthropic"){
-curHeaders["anthropic-version"]="2023-06-01";
-cs.push((curU.endsWith("/v1")?curU:curU+"/v1")+"/messages");
-curBody={model:curPick.mid,max_tokens:cfgMax,system:sys,messages:[{role:"user",content:user}]};
-if(re||tb>0){let budget=Math.max(1024,Math.min(32768,tb||8192));
-curBody.thinking={type:"enabled",budget_tokens:budget};
-curBody.max_tokens=Math.max(cfgMax,budget+1024)}}
-else{
-cs.push((curU.endsWith("/v1")?curU:curU+"/v1")+"/chat/completions");
-cs.push(curU+"/chat/completions");
-curBody={model:curPick.mid,stream:!1,temperature:cfgTemp,max_tokens:cfgMax,
-messages:[{role:"system",content:sys},{role:"user",content:user}]};
-if(re)curBody.reasoning_effort=re}
-let payload=JSON.stringify(curBody);
-let lastRes=null,lastErr="";
-for(let cur of cs){
-let mod=cur.indexOf("https:")===0?httpsMod:httpMod;
-if(!mod){lastErr="无法加载 Node HTTP 模块";continue}
-let res=await new Promise(resolve=>{
-let req=mod.request(cur,{method:"POST",headers:Object.assign({},curHeaders,{"Content-Length":Buffer.byteLength(payload)}),timeout:60000},r2=>{
-let b="";r2.on("data",c=>b+=c);
-r2.on("end",()=>{
-if(r2.statusCode>=200&&r2.statusCode<300){try{
-let root=null;
-try{root=JSON.parse(b)}catch(sseErr){
-if(typeof b==="string"&&(b.indexOf("data:")!==-1||b.indexOf("data: ")!==-1)){
-let sse="";
-for(let line of b.split(String.fromCharCode(10))){let tr=line.trim();
-if(tr.indexOf("data:")===0&&tr.indexOf("[DONE]")===-1){
-try{let c=JSON.parse(tr.slice(5).trim());
-let del=(c&&c.choices&&c.choices[0]&&(c.choices[0].delta||c.choices[0].message)&&(c.choices[0].delta||c.choices[0].message).content)||"";
-if(typeof del==="string")sse+=del}catch(_){}}}
-if(sse.trim())root={choices:[{message:{content:sse.trim()}}]}}
-if(!root)throw sseErr}
-for(let d=0;d<3;d++){
-if(root&&typeof root==="object"&&!Array.isArray(root)){
-if(root.data&&typeof root.data==="object"&&!Array.isArray(root.data))root=root.data;
-else if(root.result&&typeof root.result==="object"&&!Array.isArray(root.result))root=root.result;
-else if(root.response&&typeof root.response==="object"&&!Array.isArray(root.response))root=root.response;
-else break}}
-let out="";
-if(root&&Array.isArray(root.choices)&&root.choices[0]){
-let c0=root.choices[0],m0=c0.message||c0.delta||{};
-if(typeof m0.content==="string"&&m0.content.trim())out=m0.content;
-else if(Array.isArray(m0.content))out=m0.content.map(c=>typeof c==="string"?c:((c&&typeof c.text==="string")?c.text:"")).join("");
-if(!out&&typeof c0.text==="string"&&c0.text.trim())out=c0.text;
-if(!out){
-let think=m0.reasoning_content||m0.reasoning||m0.thought||m0.thinking||m0.reasoningText;
-if(typeof think==="string"&&think.trim())out=think.trim()}}
-if(!out&&root&&Array.isArray(root.content)){
-let tb=[],thb=[];
-for(let item of root.content){if(!item)continue;
-if(typeof item==="string")tb.push(item);
-else if(item.type==="text"&&typeof item.text==="string")tb.push(item.text);
-else if(typeof item.text==="string"&&!item.type)tb.push(item.text);
-else if(item.type==="thinking"||item.thinking)thb.push(String(item.thinking||""))}
-out=tb.length?tb.join(""):thb.join("")}
-if(!out&&root){
-if(typeof root.output_text==="string")out=root.output_text;
-else if(root.output&&typeof root.output.text==="string")out=root.output.text;
-else if(Array.isArray(root.generations)&&root.generations[0]&&typeof root.generations[0].text==="string")out=root.generations[0].text;
-else if(typeof root.reply==="string")out=root.reply}
-out=String(out||"").trim();
-if(out.indexOf("```")===0){let idx=out.indexOf(String.fromCharCode(10));if(idx>0){let last=out.lastIndexOf("```");if(last>idx)out=out.slice(idx+1,last).trim()}}
-if(out)return resolve({success:!0,text:out,model:curPick.mid,provider:curPick.pid,how:String(curPick.how||"")});
-return resolve({success:!1,code:"empty-reply",error:"模型返回了空内容（HTTP "+r2.statusCode+"）"});
-}catch(perr){return resolve({success:!1,code:"parse",error:"响应解析失败："+String(perr)})}}
-let msg="";
-try{let j=JSON.parse(b);let er=j&&(j.error||(j.data&&j.data.error));msg=(er&&(er.message||er))||j.message||""}catch(_){msg=b.slice(0,200)}
-return resolve({success:!1,code:"http",status:r2.statusCode,error:"HTTP "+r2.statusCode+(msg?("："+String(msg)):"")})})});
-req.on("error",err=>resolve({success:!1,code:"network",error:"请求失败："+String(err&&err.message||err)}));
-req.on("timeout",()=>{req.destroy();resolve({success:!1,code:"timeout",error:"请求超时（60 秒）"})});
-req.write(payload);req.end()});
-if(res&&res.success)return res;
-lastRes=res;lastErr=(res&&res.error)||lastErr;
-let cls=classify(res&&res.code,res&&res.status,res&&res.error);
-if(!cls.retry)break;
-if(cur!==cs[cs.length-1])continue;
-if(cls.kind==="rate"||cls.kind==="server"||cls.kind==="timeout"||cls.kind==="network"){
-await new Promise(z=>setTimeout(z,cls.kind==="rate"?1600:600));
-let res2=await new Promise(resolve=>{
-let req=mod.request(cur,{method:"POST",headers:Object.assign({},curHeaders,{"Content-Length":Buffer.byteLength(payload)}),timeout:60000},r2=>{
-let b="";r2.on("data",c=>b+=c);
-r2.on("end",()=>{let msg="";
-try{let j=JSON.parse(b);msg=(j&&(j.error&&(j.error.message||j.error)||j.message))||""}catch(_){msg=b.slice(0,200)}
-resolve({success:!1,code:"http",status:r2.statusCode,error:"HTTP "+r2.statusCode+(msg?("："+String(msg)):"")})})});
-req.on("error",err=>resolve({success:!1,code:"network",error:"请求失败："+String(err&&err.message||err)}));
-req.on("timeout",()=>{req.destroy();resolve({success:!1,code:"timeout",error:"请求超时（60 秒）"})});
-req.write(payload);req.end()});
-if(res2){lastRes=res2;lastErr=res2.error||lastErr}}
-}
-let fin=lastRes||{code:"unreachable",error:lastErr||("未能连通 "+curU+"，请检查供应商地址与协议类型")};
-let fc=classify(fin.code,fin.status,fin.error);
-return{success:!1,code:fc.kind||fin.code||"error",status:fin.status,
-error:fin.error||"增强失败",tip:fc.tip||"请检查模型与供应商配置",
-provider:curPick.pid,model:curPick.mid,tried:tried.slice(0,4)};
-}
-
-let res=await requestModel(pick);
-if(res&&res.success)return res;
-
-// ★ 智能故障转移（Fallback Recovery）：
-// 若首选模型因上游限制、余额不足、超时或空回复失败，自动尝试其他可用供应商的备用模型（最多 2 个），避免润色中断
-let altTried=[];
-for(let c of all){
-if(c.pid===pick.pid||!usable(c.p))continue;
-let mid=Object.keys(c.p.models||{})[0];
-if(!mid)continue;
-altTried.push(cand(c.pid,mid,"fallback-auto"));
-if(altTried.length>=2)break;
-}
-for(let altPick of altTried){
-if(!altPick)continue;
-let altRes=await requestModel(altPick);
-if(altRes&&altRes.success){
-altRes.fallbackTip="（原模型「"+pick.mid+"」不可用，已自动切换备用模型「"+altPick.mid+"」）";
-return altRes;
-}
-}
-return res;
-}catch(err2){return{success:!1,code:"exception",error:"增强失败："+String(err2&&err2.message||err2),tip:"内部异常，请把这条信息反馈给插件作者"}}});
-'''
-
-# 右键菜单「选择模型」的持久化 handler：把选中的供应商/模型写进 enhance_config.json。
-# 该文件正是 enhance-prompt handler 每次点击都会热读的 ⓪ 档来源，因此**零重启即生效**。
-# 设计取舍：只增删 providerId/modelId 两个键，其余参数（maxTokens/temperature/思考强度）原样保留；
-# 写坏 JSON / 目录不存在 / 文件被占用都必须在返回值里说清楚，不能静默失败 ——
-# 静默失败会让用户以为「选了模型」，实际下一次点击仍走旧档位。
-_ENHANCE_SAVE_HANDLER = '''
-__H__.handle("zcode:enhance-model-save",async(ev,t)=>{
-try{
-let{default:n}=await import("node:fs"),{default:r}=await import("node:path"),{default:i}=await import("node:os");
-let base=i.homedir();
-try{let s=JSON.parse(n.readFileSync(r.join(base,".zcode","v2","setting.json"),"utf-8"));
-if(s&&typeof s.dataBaseDir=="string"&&s.dataBaseDir.trim())base=s.dataBaseDir.trim()}catch(_){}
-let root=r.join(base,".zcode","v2"),f=r.join(root,"enhance_config.json");
-let cfg={};
-try{cfg=JSON.parse(n.readFileSync(f,"utf-8"))}catch(_){cfg={}}
-if(!cfg||typeof cfg!="object"||Array.isArray(cfg))cfg={};
-let pid=String((t&&t.providerId)||"").trim(),mid=String((t&&t.modelId)||"").trim();
-if((t&&t.clear)||(!pid&&!mid)){
-// 恢复「跟随界面选择」：只摘掉这两个键，其它热配置参数保持不动
-delete cfg.providerId;delete cfg.modelId}
-else{
-if(!pid||!mid)return{success:!1,error:"providerId 与 modelId 必须同时给出"};
-cfg.providerId=pid;cfg.modelId=mid}
-if(!n.existsSync(root))n.mkdirSync(root,{recursive:!0});
-n.writeFileSync(f,JSON.stringify(cfg,null,2),"utf-8");
-return{success:!0,providerId:String(cfg.providerId||""),modelId:String(cfg.modelId||""),path:f}
-}catch(err){return{success:!1,error:"写入 enhance_config.json 失败："+String(err&&err.message||err)}}});
-'''
 
 
 def _read_asar_header(asar: Path):
@@ -1533,6 +377,16 @@ def _asar_header_raw(asar: Path):
 def _asar_entry_bytes(raw: bytes, data_start: int, ent: dict) -> bytes:
     off = data_start + int(ent["offset"])
     return raw[off:off + ent["size"]]
+
+
+def _asar_find_entry(header: dict, entry_path: str) -> dict | None:
+    node = header
+    for part in entry_path.split("/"):
+        files = node.get("files") or {}
+        if part not in files:
+            return None
+        node = files[part]
+    return node
 
 
 def _asar_integrity(data: bytes, block_size: int = 4194304) -> dict:
@@ -1845,54 +699,27 @@ def _cleanup_stale_tmp(folder: Path) -> None:
                 pass
 
 
-def _refresh_chart_sidecar(asar: Path) -> None:
-    """asar 重打包后数据区整体位移：字节级补丁（chart/width）记录里的绝对 offset 与
-    asar_size 指纹都要重定位；重打包级补丁（tps/slider/puller）的 sidecar 只记 asar_size，
-    也必须跟着更新——否则后续 `--check` 会把 sidecar 报成「无」，看着像记录丢了。"""
-    for suffix in (".chart-patch.json", ".width-patch.json"):
-        _relocate_sidecar(asar, suffix)
+def _refresh_tps_sidecar(asar: Path) -> None:
+    """asar 重打包后数据区整体位移：TPS sidecar 只记 asar_size，必须跟着更新，
+    否则后续 `--check` 会把 sidecar 报成「无」，看着像记录丢了。"""
     try:
         cur_size = asar.stat().st_size
     except OSError:
         return
-    for suffix in (".tps-patch.json", ".slider-patch.json", ".puller-patch.json"):
-        side = asar.with_name(asar.name + suffix)
-        if not side.is_file():
-            continue
-        try:
-            rec = json.loads(side.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if isinstance(rec, dict) and rec.get("asar_size") != cur_size:
-            rec["asar_size"] = cur_size
-            try:
-                side.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
-                print(f"[*] 已同步 {side.name} 的指纹到重打包后的 asar")
-            except OSError:
-                pass
-
-
-def _relocate_sidecar(asar: Path, suffix: str) -> None:
-    side = asar.with_name(asar.name + suffix)
+    side = asar.with_name(asar.name + ".tps-patch.json")
     if not side.is_file():
         return
     try:
-        recs = json.loads(side.read_text(encoding="utf-8")).get("patches", [])
+        rec = json.loads(side.read_text(encoding="utf-8"))
     except Exception:
         return
-    if not recs:
-        return
-    entries = {p: (o, s) for p, o, s in _asar_header_index(asar)}
-    cur_size = asar.stat().st_size
-    changed = False
-    for r in recs:
-        hit = entries.get(r.get("path"))
-        if hit and hit[1] == r.get("size") and (r.get("offset") != hit[0] or r.get("asar_size") != cur_size):
-            r["offset"], r["asar_size"] = hit[0], cur_size
-            changed = True
-    if changed:
-        side.write_text(json.dumps({"patches": recs}, ensure_ascii=False), encoding="utf-8")
-        print(f"[*] 已同步 {side.name} 的 offset/指纹到重打包后的 asar")
+    if isinstance(rec, dict) and rec.get("asar_size") != cur_size:
+        rec["asar_size"] = cur_size
+        try:
+            side.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+            print(f"[*] 已同步 {side.name} 的指纹到重打包后的 asar")
+        except OSError:
+            pass
 
 
 def _mark_backup_patched(backup: Path, current: Path) -> None:
@@ -1914,7 +741,7 @@ def _process_script_inject(asar: Path, check_only: bool, revert: bool, src_path:
                            *, label: str, script_entry: str, tag: str,
                            side_suffix: str, bak_suffix: str,
                            dry_run: bool = False, version: str | None = None) -> bool:
-    """renderer 单脚本注入通用链路(TPS 统计栏 / 思考强度滑条共用):
+    """renderer 单脚本注入通用链路(TPS 统计栏):
     index.html </body> 前挂 <script> + 新增脚本条目,整体重排 asar、重算 integrity。
     ⚠️ zcode-tps.js 内**绝不调用 port.start()**(只 addEventListener,start 交给应用)——
     否则会消费掉服务端 Initialize 启动握手,ZCode 3.12.2 会卡在启动界面。
@@ -1958,7 +785,7 @@ def _process_script_inject(asar: Path, check_only: bool, revert: bool, src_path:
         # 已注入、但脚本内容与现行源不一致 → 必须显式报 stale。
         # 只按「结构在不在」判会输出裸「已打」，sync.check_state() 据此判 on → run_sync 走
         # `continue`（视为已一致）→ 脚本改了**永远不生效，而且一句报错都没有**。
-        # 特征串必须与模型拉取链路（--model-puller）逐字一致：check_state() 只认「含旧版组件」。
+        # 特征串必须与 sync.check_state() 逐字一致：它只认「含旧版组件」。
         if installed and src_path.is_file() and \
                 _asar_entry_bytes(raw, data_start, paths[script_entry]) != src_path.read_bytes():
             state = "已打（含旧版组件，重跑可自动更新）"
@@ -1967,13 +794,12 @@ def _process_script_inject(asar: Path, check_only: bool, revert: bool, src_path:
 
     if revert:
         if not installed and not saved:
-            print(f"[.] {asar}\n    未打{label}注入，跳过")
+            print(f"[.] {asar}\n    未打 {label}注入，跳过")
             return True
         if dry_run:
-            print(f"[~] {asar}\n    将移除{label}注入（摘除 index.html 的 tag 与脚本条目）")
+            print(f"[~] {asar}\n    将移除 {label}注入（摘除 index.html 的 tag 与脚本条目）")
             return True
-        # 外科手术式还原：只从当前 index.html 摘除本补丁的 tag，不动其他补丁
-        # （如 --model-puller）对同一文件的改动；sidecar 原件仅作兜底。
+        # 外科手术式还原：只从当前 index.html 摘除 TPS 的 tag；sidecar 原件仅作兜底。
         stripped = idx_bytes.replace(tag_b + b"\n", b"").replace(tag_b, b"")
         if stripped == idx_bytes and saved and saved.get("index_original_b64"):
             stripped = base64.b64decode(saved["index_original_b64"])
@@ -1985,12 +811,12 @@ def _process_script_inject(asar: Path, check_only: bool, revert: bool, src_path:
         side.unlink(missing_ok=True)
         bak.unlink(missing_ok=True)
         _backup_meta(bak).unlink(missing_ok=True)
-        _refresh_chart_sidecar(asar)
-        print(f"[+] {asar}\n    已移除{label}注入（新大小 {new_size:,} 字节，备份已清理）")
+        _refresh_tps_sidecar(asar)
+        print(f"[+] {asar}\n    已移除 {label}注入（新大小 {new_size:,} 字节，备份已清理）")
         return True
 
     if not src_path.is_file():
-        print(f"[!] 找不到注入源脚本 {src_path}（可用对应 --*-src 指定路径）")
+        print(f"[!] 找不到注入源脚本 {src_path}（可用 --tps-src 指定路径）")
         return False
     script_bytes = src_path.read_bytes()
 
@@ -1999,17 +825,17 @@ def _process_script_inject(asar: Path, check_only: bool, revert: bool, src_path:
     if installed:
         cur_script = _asar_entry_bytes(raw, data_start, paths[script_entry]) if script_entry in paths else None
         if cur_script == script_bytes:
-            print(f"[=] {asar}\n    已打{label}注入（脚本同源），跳过")
+            print(f"[=] {asar}\n    已打 {label}注入（脚本同源），跳过")
             return True
         if dry_run:
-            print(f"[~] {asar}\n    将热更新{label}脚本（{len(cur_script or b''):,} → {len(script_bytes):,} 字节）")
+            print(f"[~] {asar}\n    将热更新 {label}脚本（{len(cur_script or b''):,} → {len(script_bytes):,} 字节）")
             return True
         try:
             new_size = _repack_asar(asar, {script_entry: script_bytes}, set())
         except OSError as e:
             print(f"[!] {asar}\n    文件被占用或无写入权限：{e}\n    请完全退出 ZCode 后重试")
             return False
-        _refresh_chart_sidecar(asar)
+        _refresh_tps_sidecar(asar)
         print(f"[+] {asar}\n    {label}脚本已热更新（{src_path.name} {len(script_bytes):,} 字节，其余组件不变）")
         return True
 
@@ -2037,7 +863,7 @@ def _process_script_inject(asar: Path, check_only: bool, revert: bool, src_path:
         "script_entry": script_entry,
         "index_original_b64": base64.b64encode(idx_bytes).decode(),
     }, ensure_ascii=False), encoding="utf-8")
-    _refresh_chart_sidecar(asar)
+    _refresh_tps_sidecar(asar)
     print(f"[+] {asar}\n    {label}注入完成（{src_path.name} {len(script_bytes):,} 字节 -> {script_entry}，index.html 已挂载）\n"
           f"    原件备份: {bak.name} | 记录: {side.name}")
     return True
@@ -2051,243 +877,6 @@ def process_tps_footer(asar: Path, check_only: bool, revert: bool, tps_src: Path
                                   dry_run=dry_run, version=version)
 
 
-# ------------------------------------------------- preload/main IPC 桥注入（通用链路）
-
-PULLER_SPEC = {
-    "label": "模型拉取按钮",
-    "script_entry": PULLER_SCRIPT_PATH,
-    "tag": PULLER_TAG,
-    "src_name": PULLER_SCRIPT_PATH.split("/")[-1],
-    "preload_block": _models_preload_block,
-    "main_block": _models_main_block,
-    "preload_state": _models_preload_state,
-    "main_state": _models_main_state,
-    "side_suffix": ".puller-patch.json",
-    "bak_suffix": ".puller.bak",
-    "src_hint": "--puller-src",
-}
-
-ENHANCE_SPEC = {
-    "label": "增强提示词",
-    "script_entry": ENHANCE_SCRIPT_PATH,
-    "tag": ENHANCE_TAG,
-    "src_name": ENHANCE_SCRIPT_PATH.split("/")[-1],
-    "preload_block": _enhance_preload_block,
-    "main_block": _enhance_main_block,
-    "preload_state": _enhance_preload_state,
-    "main_state": _enhance_main_state,
-    "side_suffix": ".enhance-patch.json",
-    "bak_suffix": ".enhance.bak",
-    "src_hint": "--enhance-src",
-}
-
-
-def _process_ipc_patch(asar: Path, check_only: bool, revert: bool, src_path: Path | None,
-                       spec: dict, *, dry_run: bool = False, version: str | None = None) -> bool:
-    """preload 桥 + main handler + renderer 脚本 + index.html 挂载 的通用注入链路
-    （模型拉取按钮 / 增强提示词共用）。四组件均按「内容比对」判定版本，逐组件更新。
-    返回 True=成功/无需改动，False=失败。"""
-    label = spec["label"]
-    side = asar.with_name(asar.name + spec["side_suffix"])
-    bak = asar.with_name(asar.name + spec["bak_suffix"])
-    try:
-        asar_size = asar.stat().st_size
-        raw, header, data_start = _asar_header_raw(asar)
-    except (OSError, ValueError) as e:
-        print(f"[!] {asar}\n    无法读取：{e}")
-        return False
-
-    paths = {p: ent for p, ent in _asar_walk_entries(header)}
-    idx_ent = paths.get(TPS_INDEX_PATH)
-    if idx_ent is None:
-        print(f"[!] {asar}\n    未找到 {TPS_INDEX_PATH}，版本结构可能已变，跳过")
-        return False
-    idx_bytes = _asar_entry_bytes(raw, data_start, idx_ent)
-
-    def _blob(path: str) -> bytes | None:
-        ent = paths.get(path)
-        return _asar_entry_bytes(raw, data_start, ent) if ent else None
-
-    pre_blob, main_blob = _blob(PULLER_PRELOAD_PATH), _blob(PULLER_MAIN_PATH)
-    script_present = spec["script_entry"] in paths
-    idx_tagged = spec["tag"].encode() in idx_bytes
-    pre_inj, pre_synced, pre_clean, _ = spec["preload_state"](pre_blob)
-    main_inj, main_synced, main_clean, _ = spec["main_state"](main_blob)
-    cur_script = _blob(spec["script_entry"]) if script_present else None
-    installed = script_present and idx_tagged and pre_inj and main_inj
-
-    saved = None
-    if side.is_file():
-        try:
-            rec = json.loads(side.read_text(encoding="utf-8"))
-            if rec.get("asar_size") == asar_size:
-                saved = rec
-        except Exception:
-            saved = None
-
-    def _ver(ok: bool, synced: bool) -> str:
-        return "无" if not ok else ("有" if synced else "有（版本旧）")
-
-    comp = (f"renderer 脚本: {'有' if script_present else '无'} | "
-            f"index.html 挂载: {'有' if idx_tagged else '无'} | "
-            f"preload 桥: {_ver(pre_inj, pre_synced)} | main handler: {_ver(main_inj, main_synced)}")
-
-    if src_path is None:
-        src_path = Path(__file__).resolve().parent / spec["src_name"]
-    old_script = (script_present and src_path.is_file() and cur_script != src_path.read_bytes())
-
-    if check_only:
-        state = "已打" if installed else ("不完整" if (script_present or idx_tagged or pre_inj or main_inj) else "未打")
-        if installed and (not (pre_synced and main_synced) or old_script):
-            state = "已打（含旧版组件，重跑可自动更新）"
-        print(f"[*] {asar}\n    {label}注入: {state} | {comp} | sidecar: {'有' if saved else '无'} | "
-              f"备份: {'有' if bak.is_file() else '无'}")
-        return True
-
-    if revert:
-        if not installed and not saved:
-            print(f"[.] {asar}\n    未打{label}注入，跳过")
-            return True
-        # 全程外科手术式还原：只摘除自己标记定界的块，不依赖 sidecar 指纹
-        stripped = idx_bytes.replace(spec["tag"].encode() + b"\n", b"").replace(spec["tag"].encode(), b"")
-        overwrite = {TPS_INDEX_PATH: stripped}
-        if pre_inj:
-            if pre_clean is None:
-                print(f"[!] {asar}\n    preload 注入段形态不符（可能被手工改过），拒绝还原")
-                return False
-            overwrite[PULLER_PRELOAD_PATH] = pre_clean
-        if main_inj:
-            if main_clean is None:
-                print(f"[!] {asar}\n    main 注入段形态不符（可能被手工改过），拒绝还原")
-                return False
-            overwrite[PULLER_MAIN_PATH] = main_clean
-        if dry_run:
-            print(f"[~] {asar}\n    将还原{label}注入（摘除 index.html tag + preload/main 注入块）")
-            return True
-        try:
-            new_size = _repack_asar(asar, overwrite,
-                                    {spec["script_entry"]} if script_present else set())
-        except OSError as e:
-            print(f"[!] {asar}\n    文件被占用或无写入权限：{e}\n    请完全退出 ZCode 后重试")
-            return False
-        side.unlink(missing_ok=True)
-        bak.unlink(missing_ok=True)
-        _backup_meta(bak).unlink(missing_ok=True)
-        _refresh_chart_sidecar(asar)
-        print(f"[+] {asar}\n    已还原{label}注入（新大小 {new_size:,} 字节，备份已清理）")
-        return True
-
-    if not src_path.is_file():
-        print(f"[!] 找不到注入源脚本 {src_path}（可用 {spec['src_hint']} 指定路径）")
-        return False
-    script_bytes = src_path.read_bytes()
-
-    # 幂等：四组件齐、且 renderer/preload/main 注入内容均与现行实现逐字节一致才跳过
-    if installed and cur_script == script_bytes and pre_synced and main_synced:
-        print(f"[=] {asar}\n    已打{label}注入（四组件均为当前版本），跳过")
-        return True
-
-    # 锚点核实：三处定位全部唯一才动手
-    if idx_bytes.count(b"</body>") != 1:
-        print(f"[!] {asar}\n    index.html 的 </body> 出现 {idx_bytes.count(b'</body>')} 次（期望 1），拒绝盲改")
-        return False
-    pre_m = PULLER_PRELOAD_ANCHOR.findall(pre_blob or b"")
-    main_m = PULLER_MAIN_ANCHOR.findall(main_blob or b"")
-    if len(pre_m) != 1 or len(main_m) != 1:
-        print(f"[!] {asar}\n    锚点异常：preload 命中 {len(pre_m)} 次、main 命中 {len(main_m)} 次（各期望 1），"
-              f"版本结构可能已变，拒绝盲改\n    preload 锚点: {PULLER_PRELOAD_ANCHOR.pattern}\n"
-              f"    main 锚点: {PULLER_MAIN_ANCHOR.pattern}")
-        return False
-
-    # 逐组件更新：仅写入与现行实现不一致的组件
-    rec = dict(saved or {})
-    overwrite: dict[str, bytes] = {}
-    if cur_script != script_bytes:
-        overwrite[spec["script_entry"]] = script_bytes
-    if not idx_tagged:
-        overwrite[TPS_INDEX_PATH] = idx_bytes.replace(b"</body>", spec["tag"].encode() + b"\n</body>", 1)
-        rec.setdefault("index_original_b64", base64.b64encode(idx_bytes).decode())
-    if not pre_synced:
-        if pre_clean is None:
-            print(f"[!] {asar}\n    preload 已注入但形态不符（旧版/被改过），无法安全更新，拒绝"
-                  f"（先 --revert 或重装 ZCode）")
-            return False
-        anchor = PULLER_PRELOAD_ANCHOR.search(pre_clean).end()
-        overwrite[PULLER_PRELOAD_PATH] = (pre_clean[:anchor]
-                                          + spec["preload_block"](pre_m[0].decode())
-                                          + pre_clean[anchor:])
-        rec.setdefault("preload_original_b64", base64.b64encode(pre_clean).decode())
-    if not main_synced:
-        if main_clean is None:
-            print(f"[!] {asar}\n    main 已注入但形态不符（旧版/被改过），无法安全更新，拒绝"
-                  f"（先 --revert 或重装 ZCode）")
-            return False
-        anchor = PULLER_MAIN_ANCHOR.search(main_clean).start()
-        overwrite[PULLER_MAIN_PATH] = (main_clean[:anchor]
-                                       + spec["main_block"](main_m[0].decode())
-                                       + main_clean[anchor:])
-        rec.setdefault("main_original_b64", base64.b64encode(main_clean).decode())
-
-    if dry_run:
-        print(f"[~] {asar}\n    将写入组件: {'+'.join(sorted(overwrite)) or '（无变化）'}")
-        return True
-
-    if _ensure_backup(bak, asar, version) is None:
-        return False
-
-    try:
-        new_size = _repack_asar(asar, overwrite, set())
-    except OSError as e:
-        print(f"[!] {asar}\n    文件被占用或无写入权限：{e}\n    请完全退出 ZCode 后重试")
-        return False
-    _mark_backup_patched(bak, asar)
-    rec.update({
-        "asar_size": new_size,
-        "index_path": TPS_INDEX_PATH,
-        "script_entry": spec["script_entry"],
-        "preload_path": PULLER_PRELOAD_PATH,
-        "main_path": PULLER_MAIN_PATH,
-    })
-    side.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
-    _refresh_chart_sidecar(asar)
-    done = "+".join(k for k, v in (("renderer", True), ("index", TPS_INDEX_PATH in overwrite),
-                                   ("preload", PULLER_PRELOAD_PATH in overwrite),
-                                   ("main", PULLER_MAIN_PATH in overwrite)) if v)
-    print(f"[+] {asar}\n    {label}注入完成（{done}，{src_path.name} {len(script_bytes):,} 字节）\n"
-          f"    原件备份: {bak.name} | 记录: {side.name}")
-    return True
-
-
-def process_model_puller(asar: Path, check_only: bool, revert: bool, puller_src: Path | None, *,
-                         dry_run: bool = False, version: str | None = None) -> bool:
-    """模型拉取按钮（设置页「⚡️ 自动拉取模型」）。"""
-    return _process_ipc_patch(asar, check_only, revert, puller_src, PULLER_SPEC,
-                              dry_run=dry_run, version=version)
-
-
-def process_enhance_prompt(asar: Path, check_only: bool, revert: bool, enhance_src: Path | None, *,
-                           dry_run: bool = False, version: str | None = None) -> bool:
-    """增强提示词（输入框「增强提示词」按钮，用当前选中的模型润色草稿）。"""
-    return _process_ipc_patch(asar, check_only, revert, enhance_src, ENHANCE_SPEC,
-                              dry_run=dry_run, version=version)
-
-
-def _v2_root(override: str | None = None) -> Path:
-    """配置根目录 <dataBaseDir>/.zcode/v2（dataBaseDir 取自 ~/.zcode/v2/setting.json，
-    与客户端 bootstrap 同逻辑）。"""
-    if override:
-        return Path(override)
-    base = Path.home()
-    try:
-        s = json.loads((base / ".zcode" / "v2" / "setting.json").read_text(encoding="utf-8"))
-        dbd = s.get("dataBaseDir")
-        if isinstance(dbd, str) and dbd.strip():
-            base = Path(dbd.strip())
-    except Exception:
-        pass
-    return base / ".zcode" / "v2"
-
-
 def _pad_display(text: str, width: int) -> str:
     """按终端显示宽度补齐（中日韩字符占两列），让汇总表对齐。"""
     w = sum(2 if ord(ch) > 0x2E7F else 1 for ch in text)
@@ -2298,9 +887,7 @@ def _auto_prune_stale(asar: Path) -> None:
     """打补丁时自动静默清理失效归档（.stale-*）与废弃功能残留，防止客户端升级后积累几百兆历史文件。"""
     try:
         folder = asar.parent
-        for pat in (f"{asar.name}*.stale-*", f"{asar.name}*.tps-tmp", f"{asar.name}.*.tmp",
-                    f"{asar.name}.slider.*", f"{asar.name}*.slider-patch.json",
-                    f"{asar.name}*.width-patch.json"):
+        for pat in (f"{asar.name}*.stale-*", f"{asar.name}*.tps-tmp", f"{asar.name}.*.tmp"):
             for p in folder.glob(pat):
                 if p.is_file():
                     try:
@@ -2315,7 +902,7 @@ def prune_artifacts(asars: list[Path], deep: bool, dry_run: bool = False) -> int
     """清理补丁产物，返回回收的字节数。
 
     默认只删「确定没用的」：`.stale-*` 归档（升级前的旧版本整包）、`*.tps-tmp` / `*.tmp` 残留。
-    `--deep` 连当前 `.bak`、sidecar 与配置备份一起删 —— **之后将无法还原**，需要重打才有记录。
+    `--deep` 连当前 `.bak` 与 sidecar 一起删 —— **之后将无法还原**，需要重打才有记录。
     只删本工具自己命名的文件，不碰目录里其它任何东西。"""
     targets: list[Path] = []
 
@@ -2327,21 +914,14 @@ def prune_artifacts(asars: list[Path], deep: bool, dry_run: bool = False) -> int
 
     for asar in asars:
         folder = asar.parent
-        collect(folder, (f"{asar.name}*.stale-*", f"{asar.name}*.tps-tmp", f"{asar.name}.*.tmp",
-                         f"{asar.name}.slider.*", f"{asar.name}*.slider-patch.json",
-                         f"{asar.name}*.width-patch.json"))
+        collect(folder, (f"{asar.name}*.stale-*", f"{asar.name}*.tps-tmp", f"{asar.name}.*.tmp"))
         if deep:
             collect(folder, (f"{asar.name}*.bak", f"{asar.name}*.bak.meta.json",
                              f"{asar.name}*-patch.json"))
-        # 内核备份与档位配置备份（若存在）
+        # 内核备份（历史整包还原用，若存在）
         collect(folder / "glm", ("zcode.cjs.bak", "zcode.cjs.bak.meta.json"))
         if deep:
             collect(folder / "glm", ("zcode.cjs.bak.stale-*",))
-
-    if deep:
-        v2 = _v2_root(None)
-        collect(v2, ("provider_config.json.reasoning-bak", "config.json.puller-bak",
-                     "provider_config.json.puller-bak", "provider_config.json.tmp"))
 
     targets = sorted(set(targets))
     if not targets:
@@ -2432,8 +1012,7 @@ def zcode_running() -> bool:
 def main() -> int:
     safe_stdio()          # 输出被重定向时 cp936 会编不出 ✓/✗，先把这条路封死
     ap = argparse.ArgumentParser(
-        description="ZCode 客户端补丁工具：用量页去截断 + TPS 统计栏 "
-                    "+ 模型拉取按钮 + 增强提示词按钮（自动探测安装位置）")
+        description="ZCode 客户端补丁工具：TPS 统计栏（自动探测安装位置）")
     ap.add_argument("target", nargs="?", help="可选：安装根目录或 zcode.cjs 路径；缺省自动探测全部")
     mode_g = ap.add_mutually_exclusive_group()
     mode_g.add_argument("--check", action="store_true", help="只检查状态，不修改")
@@ -2443,23 +1022,12 @@ def main() -> int:
                     help="跳过备份指纹校验（备份与当前文件不是同一版本时强制继续，慎用）")
     ap.add_argument("--verbose", action="store_true", help="打印安装探测的每一步结果")
     ap.add_argument("--all", action="store_true",
-                    help="对所有功能生效（等价于同时给出全部补丁参数）："
-                         "`--all --check` 一条命令体检全部功能，`--all` 全部打上，"
-                         "`--all --revert` 全部还原")
-    ap.add_argument("--usage-chart", action="store_true",
-                    help="补丁用量页：去掉趋势图 Top6 与饼图 Top5+其他模型 的截断，全部模型展示")
+                    help="打开全部补丁（当前仅 TPS）："
+                         "`--all --check` 只读体检，`--all` 打上，`--all --revert` 还原")
     ap.add_argument("--tps-footer", action="store_true",
                     help="注入 TPS 统计栏：输入框下方常驻统计条（本轮指标 + 会话累计），asar 重打包级")
     ap.add_argument("--tps-src", default=None,
                     help="指定注入脚本路径（默认本目录 zcode-tps.js）")
-    ap.add_argument("--model-puller", action="store_true",
-                    help="注入模型拉取按钮：设置页「自动拉取模型」，经 preload/main IPC 读写 config，asar 重打包级")
-    ap.add_argument("--puller-src", default=None,
-                    help="指定注入的 zcode-model-puller.js 路径（默认用本脚本同目录自带的）")
-    ap.add_argument("--enhance-prompt", action="store_true",
-                    help="注入「增强提示词」按钮：输入框旁一键用当前选中的模型润色草稿，asar 重打包级")
-    ap.add_argument("--enhance-src", default=None,
-                    help="指定注入的 zcode-enhance-prompt.js 路径（默认用本脚本同目录自带的）")
     ap.add_argument("--prune", action="store_true",
                     help="清理安装目录里的补丁产物（旧版本归档 / 临时文件残留）")
     ap.add_argument("--deep", action="store_true",
@@ -2488,8 +1056,7 @@ def main() -> int:
             return 1
         return 0
 
-    asar_flags = any((args.usage_chart, args.tps_footer,
-                      args.model_puller, args.enhance_prompt))
+    asar_flags = args.tps_footer
     if not asar_flags:
         ap.print_help()
         return 0
@@ -2530,20 +1097,10 @@ def main() -> int:
     print(f"=== 客户端版本 {version or '未知'} | 目标 {len(asars)} 处 | 模式：{mode} ===")
 
     steps = [
-        (args.usage_chart, "用量页去截断补丁",
-         lambda a: process_usage_chart(a, args.check, args.revert, dry_run=args.dry_run)),
         (args.tps_footer, "TPS 统计栏注入",
          lambda a: process_tps_footer(a, args.check, args.revert,
                                       Path(args.tps_src) if args.tps_src else None,
                                       dry_run=args.dry_run, version=version)),
-        (args.model_puller, "模型拉取按钮注入",
-         lambda a: process_model_puller(a, args.check, args.revert,
-                                        Path(args.puller_src) if args.puller_src else None,
-                                        dry_run=args.dry_run, version=version)),
-        (args.enhance_prompt, "增强提示词注入",
-         lambda a: process_enhance_prompt(a, args.check, args.revert,
-                                          Path(args.enhance_src) if args.enhance_src else None,
-                                          dry_run=args.dry_run, version=version)),
     ]
     for enabled, title, fn in steps:
         if not enabled:

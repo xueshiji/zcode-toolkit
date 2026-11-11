@@ -348,7 +348,7 @@ def step_install(args) -> None:
     # 1) 标准库自检：把脚本真正会 import 的模块拉一遍，提前暴露环境残缺
     import importlib.util
     needed = ["argparse", "json", "hashlib", "struct", "shutil", "subprocess",
-              "pathlib", "tempfile", "unicodedata", "urllib.request"]
+              "pathlib", "tempfile", "unicodedata"]
     missing = [m for m in needed
                if importlib.util.find_spec(m) is None]
     if missing:
@@ -394,7 +394,7 @@ def step_build(args) -> None:
         dry_run=args.dry_run, quiet=True)
     ok("Python 语法校验通过")
 
-    # 顺带编译 scripts/ 下的全部脚本（含增强/滑条等未列入必需清单的）
+    # 顺带编译 scripts/ 下的全部脚本（含未列入必需清单的辅助脚本）
     extra = sorted(p for p in SCRIPTS.glob("*.py") if p not in targets)
     if extra:
         info(f"py_compile：其余 {len(extra)} 个脚本")

@@ -198,7 +198,7 @@
       startedAt: null, endedAt: null, activeMs: null, modelDurationMs: null,
       firstChunkAt: null, rowFirstAt: null, lastUsageAt: null,
       outputTokens: 0, inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 0,
-      textTok: 0, win: [], modelId: null, streaming: false,
+      textTok: 0, win: [], streaming: false,
     });
     return turns.get(id);
   };
@@ -286,10 +286,6 @@
       t.cacheWriteTokens += ev.cacheWriteTokens || 0;
       t.reasoningTokens += ev.reasoningTokens || 0;
       t.totalTokens += ev.totalTokens || 0;
-      t.modelId = ev.modelId || t.modelId;
-      if (t.modelId && typeof window !== "undefined") {
-        window.__ztpsCurrentModelId = t.modelId;
-      }
       t.sessionId = ev.sessionId || t.sessionId;
       t.lastUsageAt = ev.occurredAt ?? t.lastUsageAt;
       if (t.firstChunkAt == null && firstChunkByScid[scid] != null) {

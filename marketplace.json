@@ -1,19 +1,19 @@
 {
   "name": "zcode-toolkit",
-  "description": "ZCode 桌面客户端一站式原生增强套件（zcode-tokenspeed）：TPS 实时状态栏、多模型提示词润色、用量去截断与升级无感自愈。零依赖、幂等注入、安全可还原。",
+  "description": "ZCode 桌面客户端 TPS 实时状态栏（zcode-tokenspeed）：首 token 延迟、tok/s、会话累计与命中率常驻展示，升级无感自愈、幂等注入、安全可还原。",
   "plugins": [
     {
       "name": "zcode-tokenspeed",
       "source": "./",
-      "version": "0.6.23",
+      "version": "0.7.0",
       "icon": "https://raw.githubusercontent.com/c80361619/zcode-toolkit/main/assets/icon.png",
-      "description": "ZCode 桌面客户端全方位原生体验增强套件：TPS 实时状态栏、提示词多模型智能润色、用量图表去截断与设置页模型拉取。内置客户端升级自动感知与无感自愈看护，全量幂等、安全可还原，支持按需逐项开关。",
-      "displayName": "ZCode Patcher",
+      "description": "ZCode 桌面客户端 TPS 实时状态栏：首 token 延迟、tok/s 生成速度、Token 统计与会话命中率常驻展示。内置客户端升级自动感知与无感自愈看护，幂等、安全可还原。",
+      "displayName": "ZCode TPS 状态栏",
       "displayName_i18n": {
-        "zh-CN": "ZCode 原生体验增强"
+        "zh-CN": "ZCode TPS 状态栏"
       },
       "description_i18n": {
-        "zh-CN": "为 ZCode 桌面客户端提供全方位原生体验增强：输入框常驻 TPS 指标条、智能提示词增强（右键自选润色模型）、用量图表全量展示。内置客户端升级自动感知与无感自愈看护，支持在插件详情页逐项开关，全量幂等且随时可精确还原。"
+        "zh-CN": "为 ZCode 桌面客户端提供输入框常驻的 TPS 性能状态栏：首 token 延迟、tok/s、本轮与会话累计、缓存命中率一目了然。内置客户端升级自动感知与无感自愈看护，幂等注入且随时可精确还原。"
       },
       "category": "developer-tools",
       "tags": [
@@ -21,7 +21,7 @@
         "patch",
         "enhancement",
         "tps",
-        "prompt-engineering",
+        "performance",
         "self-healing",
         "productivity"
       ]

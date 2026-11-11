@@ -24,7 +24,7 @@ r"""zcode-tokenspeed 安装自检（doctor）——只读，不改任何文件�
   6. hooks/hooks.json 是否存在、命令是否可执行
   7. 钩子到底跑没跑过（_sync.last / _sync.log 心跳与日志）
   7.5 退出后看护有没有真的等到 ZCode 退出（决定补丁到底写没写进去）
-  8. 四项补丁当前在客户端里的实际状态
+  8. TPS 状态栏补丁当前在客户端里的实际状态
 
 输出末尾给出「结论」，直接指出卡在哪一环、下一步该做什么。
 """
@@ -57,15 +57,11 @@ REPO_NAME = "zcode-toolkit"
 MIN_PY = (3, 10)
 
 PATCH_KEYS = [
-    ("usage_chart", "用量页去截断"),
     ("tps_footer", "TPS 状态栏"),
-    ("enhance_prompt", "增强提示词"),
-    ("model_puller", "模型拉取按钮"),
 ]
-# 「重打包级」= 要改写整个 app.asar（其余几项只改字节级原地覆盖）。
-# 注意：zcode_patcher.py 只要发现 ZCode.exe 在跑就一律拒绝写入，
-# 所以都得等退出后由看护写。这个集合只用来区分「改的东西有多重」，不再代表「要不要重启」。
-REPACK_KEYS = {"tps_footer", "enhance_prompt", "model_puller"}
+# 「重打包级」= 要改写整个 app.asar。zcode_patcher.py 只要发现 ZCode 在跑就一律拒绝写入，
+# 所以必须等退出后由看护写。这个集合只用来区分「改的东西有多重」，不再代表「要不要重启」。
+REPACK_KEYS = {"tps_footer"}
 
 OK, WARN, BAD, INFO = "  [√]", "  [!]", "  [×]", "  [i]"
 
@@ -427,16 +423,14 @@ def check_options() -> bool:
             print(f"        {label:<14} {key} = {saved[key]}{tag}")
             if on:
                 on_keys.append(key)
-    if "core_patch" in saved:
-        print(f"        {'思考档位内核补丁':<14} core_patch = {saved['core_patch']}")
-    unknown = [k for k in saved if k not in dict(PATCH_KEYS) and k != "core_patch"]
+    unknown = [k for k in saved if k not in dict(PATCH_KEYS)]
     for k in unknown:
-        print(f"        (未知键) {k} = {saved[k]}")
+        print(f"        (旧版遗留键，已忽略) {k} = {saved[k]}")
     if on_keys:
         repack = [k for k in on_keys if k in REPACK_KEYS]
         extra = f"，其中 {len(repack)} 项属重打包级" if repack else ""
         print(f"{WARN} 以上 {len(on_keys)} 项都要等 ZCode **完全退出**后由看护写入"
-              f"（客户端运行时会拒绝改写 app.asar 与 provider_config.json，"
+              f"（客户端运行时会拒绝改写 app.asar，"
               f"而会话钩子必然在运行中触发）{extra}；写完会自动重启 ZCode")
     print(f"{OK} 有已保存的开关")
     return True
@@ -752,7 +746,7 @@ def auto_fix() -> int:
     """自动修复升级或配置异常：
     1. 启用插件（enabledPlugins 改为 true）
     2. 清理陈旧的看护锁
-    3. 如果 ZCode 未运行，立即应用全部补丁；若正在运行，调度退出后看护并给出提示
+    3. 如果 ZCode 未运行，立即应用 TPS 补丁；若正在运行，调度退出后看护并给出提示
     """
     hr("一键自愈与修复（--fix）")
     fixed_items = []
@@ -821,16 +815,16 @@ def auto_fix() -> int:
         except Exception as e:
             print(f"{BAD} 启动看护失败：{e}")
         print(f"{INFO} 提示：请在托盘图标【右键 → 退出】完全退出 ZCode 一次，")
-        print("       看护将在后台自动把全部补丁写进客户端并重新拉起 ZCode！")
+        print("       看护将在后台自动把 TPS 状态栏写进客户端并重新拉起 ZCode！")
     else:
-        print(f"[*] ZCode 未运行，开始直接注入全部补丁...")
+        print(f"[*] ZCode 未运行，开始直接注入 TPS 状态栏...")
         try:
             r = subprocess.run([sys.executable, str(PATCHER), "--all"],
                                cwd=str(HERE), capture_output=True, encoding="utf-8", errors="replace",
                                **no_window_kwargs())
             print((r.stdout or "") + (r.stderr or ""))
             if r.returncode == 0:
-                fixed_items.append("全量补丁注入完成 (zcode_patcher.py --all)")
+                fixed_items.append("TPS 状态栏注入完成 (zcode_patcher.py --all)")
             else:
                 print(f"{BAD} 补丁注入退出码: {r.returncode}")
         except Exception as e:

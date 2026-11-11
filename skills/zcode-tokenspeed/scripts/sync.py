@@ -3,8 +3,7 @@
 """zcode-tokenspeed 插件开关同步（由 SessionStart hook 调用）
 
 把客户端补丁同步到期望状态：
-  字节级补丁（用量图表 / 弹窗加宽 / 档位配置）—— 立即写入，下次启动可见
-  重打包级补丁（状态栏 / 滑条 / 增强 / 拉取）—— 交给退出后看护，ZCode 退出时写入
+  TPS 状态栏（asar 重打包级）—— 交给退出后看护，ZCode 退出时写入
 
 **零配置自动注入**：ZCode 只在用户点过「保存配置」后才把开关写进 config.json。
 如果没保存过就什么都不做，用户看到的就是「装好了但没生效」。所以这里改为：
@@ -59,11 +58,10 @@ CLIENT_FINGERPRINT = HERE / "_client_fingerprint.json"
 
 # 配置键 -> (zcode_patcher.py 参数, 是否重打包级)
 PATCHES = [
-    ("usage_chart", ["--usage-chart"], False),
     ("tps_footer", ["--tps-footer"], True),
-    ("enhance_prompt", ["--enhance-prompt"], True),
-    ("model_puller", ["--model-puller"], True),
 ]
+# 已移除功能的历史开关键可能仍留在用户配置或旧 _watchdog.want 里，同步时一律忽略
+PATCH_KEYS = {key for key, _args, _repack in PATCHES}
 
 DETACHED_PROCESS = 0x00000008
 CREATE_NO_WINDOW = 0x08000000
@@ -233,7 +231,7 @@ def read_options():
     # 宿主若把插件配置注入 hook 环境，优先用环境变量。
     # 键名必须 `.lower()` 归一：Windows 上 os.environ 会把键名**转成大写**
     # （CPython 对 nt 的实现就是「Env Var Names Must Be UPPERCASE」），
-    # 于是 ZCODE_PLUGIN_CONFIG_reasoning_config 读出来是 REASONING_CONFIG，
+    # 于是 ZCODE_PLUGIN_CONFIG_tps_footer 读出来是 TPS_FOOTER，
     # 与开关名对不上 → `merged = {**defaults, **explicit}` 里默认值（全 true）胜出，
     # 用户保存的开关会被**整体忽略**。
     env_opts = _coerce({key[len("ZCODE_PLUGIN_CONFIG_"):].lower(): val
@@ -260,14 +258,13 @@ def read_options():
 def check_state(args) -> str:
     """跑 --check 判断当前注入状态：on / stale / off / na（本版本不适用）/ unknown。
 
-    `na` 是必需的第三态：例如 ≤3.11 专用的内核补丁在 3.14+ 上会明确打印
-    「本补丁不适用」。旧逻辑只看「未打」→ 把它当成 off → 去执行 → 脚本空转一圈，
-    最后却报成「已生效」。默认值全开之后，这个误报每次装完都会出现，必须区分开。
+    `na` 是必需的第三态：补丁若明确打印「本补丁不适用」，不能把它当成 off 去执行。
+    旧逻辑只看「未打」→ 去执行 → 脚本空转一圈，最后却报成「已生效」，必须区分开。
 
     ★ `stale`（已打但内容旧）是 0.6.1 补的第四态，修的是一类**最容易被误判成
     「已生效」**的场景：
 
-        插件更新到新版（注入脚本改了，比如 0.5.11 的按钮跑出输入框修复）
+        插件更新到新版（注入脚本改了）
         → 用户按提示退出并重启 ZCode
         → 但 app.asar 里的注入片段**还是旧版**，因为「更新插件」只换了插件目录，
           **不会**重新注入 app.asar
@@ -277,8 +274,8 @@ def check_state(args) -> str:
     而且报告里一句「未处理」都没有，只有一个可疑的静默。
 
     判据是 zcode_patcher.py 自己在 `--check` 里给出的两种措辞：
-      * 「已打（含旧版组件，重跑可自动更新）」   → 四组件齐但内容 != 现行实现
-      * 「已打（四组件均为当前版本），跳过」     → 真正的最新
+      * 「已打（含旧版组件，重跑可自动更新）」   → 注入内容 != 现行脚本
+      * 「已打」，且脚本同源                       → 真正的最新
     前者必须归为 stale（要求重跑），不能归为 on。
     """
     r = subprocess.run([sys.executable, str(PATCHER), *args, "--check"],
@@ -289,11 +286,6 @@ def check_state(args) -> str:
     out = (r.stdout or "") + (r.stderr or "")
     if "不适用" in out:
         return "na"
-    if "原生档位配置" in out:
-        # 「无需写入」只出现在「not planned」分支（档位配置已是最新）；
-        # 否则就是有 [ ] 待写入项 → off。别用「已是最新」判：该词在有待写入项时也会打印
-        # （指的是另外 N 个已配好的模型），会误判成 on。
-        return "on" if "无需写入" in out else "off"
     # 「已打（含旧版组件，重跑可自动更新）」必须排在 "已打" 之前判：
     # 这个串本身包含 "已打"，顺序反了就会被后面那条吃掉，stale 永远走不到。
     if "含旧版组件" in out:
@@ -319,7 +311,6 @@ def check_state(args) -> str:
 REJECT_MARKS = (
     "锚点匹配异常",
     "拒绝盲改",
-    "无法安全更新，拒绝",
     "不符合预期，拒绝",
 )
 
@@ -365,6 +356,7 @@ def run_patcher(args, revert: bool) -> str:
 
 def start_watchdog(wanted: dict) -> None:
     """启动退出后看护：等 ZCode 退出 → 应用重打包级补丁。"""
+    wanted = {k: v for k, v in wanted.items() if k in PATCH_KEYS}
     if not wanted:
         return
     want_file = HERE / "_watchdog.want"
@@ -413,12 +405,14 @@ def resolve_wanted() -> tuple[dict, str]:
     """
     opts, source = read_options()
     defaults = declared_defaults()
+    defaults = {k: v for k, v in defaults.items() if k in PATCH_KEYS}
     if source is None:
         if not defaults:
             return {}, ""
         log("配置里没有本插件（从未保存过开关）→ 改用插件清单声明的默认值")
         return dict(defaults), "插件默认值（从未保存过开关）"
-    explicit = {k: v for k, v in opts.items() if isinstance(v, bool)}
+    explicit = {k: v for k, v in opts.items()
+                if isinstance(v, bool) and k in PATCH_KEYS}
     if not explicit:
         if not defaults:
             return {}, ""
@@ -445,14 +439,14 @@ def run_sync(echo: bool = False) -> str:
         want = wanted[key]
         state = check_state(args)
         if state == "na":
-            skipped.append(key)          # 本版本不需要这个补丁（如 3.14+ 的内核补丁）
+            skipped.append(key)          # 补丁明确报告本版本不适用
             continue
         if state == "unknown":
             failed.append(f"{key}(状态未知)")
             continue
         if state == "stale":
             # 已装的是旧版注入片段 → 无论开关要求开还是关，都必须重跑一次：
-            #   want=True  → 重跑会把四组件更新到与现行脚本一致
+            #   want=True  → 重跑会把注入脚本更新到与现行版本一致
             #   want=False → 反正要还原，直接走还原分支，不必先更新
             if not want:
                 verdict = run_patcher(args, revert=True)
@@ -605,17 +599,16 @@ def build_notice(is_upgrade: bool = False, version: str = "") -> str:
     ver_tag = f"至 v{version} " if version else ""
     if is_upgrade:
         return (
-            f"检测到 ZCode 客户端已升级{ver_tag}！官方升级会覆盖客户端文件，增强补丁已在后台自动重新排期：\n"
-            "· 全部补丁项将在你**完全退出 ZCode**（托盘图标右键 → 退出，关窗口不算）时由后台看护自动写入；\n"
-            "  写入完成后看护会自动重启 ZCode，下次启动即可重新恢复全部增强功能！\n"
-            "· 随时可运行自检核对当前各补丁状态（只读）：\n"
+            f"检测到 ZCode 客户端已升级{ver_tag}！官方升级会覆盖客户端文件，TPS 状态栏补丁已在后台自动重新排期：\n"
+            "· 会在你**完全退出 ZCode**（托盘图标右键 → 退出，关窗口不算）时由后台看护自动写入；\n"
+            "  写入完成后看护会自动重启 ZCode，下次启动即可恢复状态栏！\n"
+            "· 随时可运行自检核对当前补丁状态（只读）：\n"
             f'    python "{doctor}"'
         )
     return (
         f"{NOTICE_HEAD}。本次会话启动时已在后台开始同步：\n"
-        "· 八项补丁（思考档位配置、用量页去截断、模型弹窗加宽、TPS 状态栏、思考强度滑条、"
-        "增强提示词、模型拉取按钮）都要等你**完全退出 ZCode**（托盘图标右键 → 退出）时才会写入 ——\n"
-        "  客户端运行期间会拒绝改写 app.asar 与 provider_config.json；退出后由看护写入，"
+        "· TPS 状态栏补丁需要你**完全退出 ZCode**（托盘图标右键 → 退出）时才会写入 ——\n"
+        "  客户端运行期间会拒绝改写 app.asar；退出后由看护写入，"
         "并自动把 ZCode 重新拉起来，再启动即可见。\n"
         "这一条只在首次自动注入时出现。想核对结果可以运行（只读，可选）：\n"
         f'    python "{doctor}"'

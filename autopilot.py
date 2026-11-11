@@ -15,8 +15,8 @@
   2. **可恢复的错误自动重试，不可恢复的立刻停下并说清怎么办**。错误分七类
      （env/dep/build/test/deploy/permission/lock/timeout），每类有独立的处置策略。
   3. **一切都有日志**。同时写人读文本日志与 JSONL 结构化日志，失败时给出报告文件路径。
-  4. **无人值守不等于无人可控**。默认「能自动做的自动做」，涉及不可逆动作（重建 asar、
-     改 provider_config.json）一律先做备份；`--dry-run` 可全程预演。
+  4. **无人值守不等于无人可控**。默认「能自动做的自动做」，涉及不可逆动作（重建 asar）
+     一律先做备份；`--dry-run` 可全程预演。
 
 典型用法：
     python autopilot.py                    # 全自动跑通（含部署）
@@ -627,7 +627,7 @@ def ensure_dependencies(log: Logger, dry_run: bool) -> dict:
 
     # --- 1) 标准库：必需 ---
     needed = ["argparse", "json", "hashlib", "struct", "shutil", "subprocess",
-              "pathlib", "tempfile", "unicodedata", "urllib.request",
+              "pathlib", "tempfile", "unicodedata",
               "dataclasses", "logging", "traceback"]
     missing = [m for m in needed if importlib.util.find_spec(m) is None]
     if missing:
@@ -834,11 +834,7 @@ def step_deploy(log: Logger, dry_run: bool, *, unattended: bool,
             raise StepFailure(f"缺少看护脚本：{WATCHDOG}", kind=ErrorKind.DEP)
 
         # 看护的 --want 参数与 sync.py 保持同一套键名
-        wants = [
-            "--want=usage_chart=on",
-            "--want=tps_footer=on", "--want=enhance_prompt=on",
-            "--want=model_puller=on",
-        ]
+        wants = ["--want=tps_footer=on"]
         flags = 0x00000008 | 0x08000000 if os.name == "nt" else 0   # DETACHED|NO_WINDOW
         try:
             kwargs: dict = {"cwd": str(SCRIPTS),

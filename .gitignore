@@ -15,21 +15,10 @@ __pycache__/
 *.bak.meta.json
 *.bak.stale-*
 *.tps.bak
-*.puller.bak
-*.slider.bak
-*.original.bak
 *-patch.json
-*.chart-patch.json
 *.tps-patch.json
-*.puller-patch.json
-*.slider-patch.json
-*.reasoning-bak
 *.tps-tmp
 *.tmp
-
-# 捕获/探测产物（含 API Key 与请求体，禁止入库）
-tap-capture*.jsonl
-probe-max-tokens*.jsonl
 
 # 全自动流水线日志（autopilot.py / run.sh / run.cmd 运行时产物）
 logs/
@@ -50,5 +39,4 @@ NVIDIA Corporation/
 # 本地视觉验收夹具与截图（临时验证产物，不入库）
 _smoke/
 .playwright-mcp/
-slider-panel-*.png
 .dsh-memory/

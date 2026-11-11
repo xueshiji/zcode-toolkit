@@ -9,7 +9,7 @@
 会直接抛 `UnicodeEncodeError`，**把整段输出打断**。
 
 实测：`doctor.py` 用 subprocess 捕获 `zcode_patcher.py` 的输出时，
-汇总表在 `✓ 用量页去截断补丁` 那一行崩掉，用户看到的是半张表 + traceback，
+汇总表在 `✓ TPS 统计栏注入` 那一行崩掉，用户看到的是半张表 + traceback，
 还会误以为是补丁本身失败。交互式控制台走 WriteConsoleW，所以这个坑**只在管道里露头**。
 
 两条防线：

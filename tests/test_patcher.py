@@ -97,7 +97,7 @@ def patcher_stubbed(sync, states=None, verdicts=None):
       check_state   → 查表返回（默认全 "on"，即「客户端已一致」，最安全的基线）
       run_patcher   → 只记录，不执行（默认返回 "ok"；verdicts 可让某组参数返回 "refused"/"fail"）
       start_watchdog→ 只记录，不起进程
-    调用记录形如 ("run", ("--usage-chart",), False) / ("watchdog", {"tps_footer": True})。
+    调用记录形如 ("run", ("--tps-footer",), False) / ("watchdog", {"tps_footer": True})。
     """
     table = states or {}
     vtable = verdicts or {}
@@ -323,48 +323,6 @@ class TestAsarRepack(TempCase):
         t.join(5)
 
 
-class TestIntegritySync(TempCase):
-    """integrity 同步必须只动目标条目——同内容条目不能被误伤。"""
-
-    def setUp(self):
-        super().setUp()
-        self.asar = self.tmp / "app.asar"
-        build_asar(self.asar, {
-            "dup1.txt": b"same-content",
-            "dup2.txt": b"same-content",
-            "target.js": b"old-target",
-        })
-
-    def test_sync_only_touches_target_entry(self):
-        new = b"new-target"
-        raw, header, data_start = zp._asar_header_raw(self.asar)
-        ent = zp._asar_find_entry(header, "target.js")
-        # 原地覆盖 + 同步 integrity（模拟字节级补丁）
-        with open(self.asar, "r+b") as f:
-            f.seek(data_start + int(ent["offset"]))
-            f.write(new)
-        quiet(zp._asar_sync_integrity, self.asar, "target.js", new)
-
-        _, header2, _ = zp._asar_header_raw(self.asar)
-        self.assertEqual(zp._asar_find_entry(header2, "target.js")["integrity"],
-                         zp._asar_integrity(new))
-        for p in ("dup1.txt", "dup2.txt"):
-            self.assertEqual(zp._asar_find_entry(header2, p)["integrity"],
-                             zp._asar_integrity(b"same-content"),
-                             f"{p} 的 integrity 被误改")
-
-    def test_sync_is_idempotent(self):
-        new = b"new-target"
-        zp._asar_sync_integrity(self.asar, "target.js", new)
-        before = self.asar.read_bytes()
-        quiet(zp._asar_sync_integrity, self.asar, "target.js", new)
-        self.assertEqual(self.asar.read_bytes(), before, "重复同步不应改文件")
-
-    def test_sync_dry_run_does_not_write(self):
-        before = self.asar.read_bytes()
-        quiet(zp._asar_sync_integrity, self.asar, "target.js", b"zzz", dry_run=True)
-        self.assertEqual(self.asar.read_bytes(), before)
-
 
 class TestRepackMemory(TempCase):
     """重打包不该把整包读进内存——真实 app.asar 三百多 MB，整包读入会让峰值接近 2× 包体。"""
@@ -407,8 +365,8 @@ class TestPrune(TempCase):
         self.asar = self.tmp / "app.asar"
         build_asar(self.asar, {"a.js": b"aaaa"})
         for name in ("app.asar.tps.bak", "app.asar.tps.bak.meta.json",
-                     "app.asar.chart-patch.json",
-                     "app.asar.puller.bak.stale-20260101-000000",
+                     "app.asar.tps-patch.json",
+                     "app.asar.old.bak.stale-20260101-000000",
                      "app.asar.123.tmp", "app.asar.tps-tmp",
                      "unrelated.txt", "app.asar.old", "app.asarfoo"):
             (self.tmp / name).write_bytes(b"x" * 10)
@@ -419,10 +377,10 @@ class TestPrune(TempCase):
     def test_default_prune_only_archives_and_temps(self):
         quiet(zp.prune_artifacts, [self.asar], False)
         left = self.names()
-        for keep in ("app.asar.tps.bak", "app.asar.chart-patch.json",
+        for keep in ("app.asar.tps.bak", "app.asar.tps-patch.json",
                      "unrelated.txt", "app.asar.old", "app.asarfoo", "app.asar"):
             self.assertIn(keep, left, f"{keep} 不该被删")
-        for gone in ("app.asar.puller.bak.stale-20260101-000000",
+        for gone in ("app.asar.old.bak.stale-20260101-000000",
                      "app.asar.123.tmp", "app.asar.tps-tmp"):
             self.assertNotIn(gone, left, f"{gone} 应被清理")
 
@@ -430,7 +388,7 @@ class TestPrune(TempCase):
         quiet(zp.prune_artifacts, [self.asar], True)
         left = self.names()
         for gone in ("app.asar.tps.bak", "app.asar.tps.bak.meta.json",
-                     "app.asar.chart-patch.json"):
+                     "app.asar.tps-patch.json"):
             self.assertNotIn(gone, left, f"{gone} 应被 --deep 清理")
         self.assertIn("app.asar", left, "包本体不能删")
         self.assertIn("unrelated.txt", left)
@@ -522,185 +480,13 @@ class TestSidecarFingerprint(TempCase):
         self.asar = self.tmp / "app.asar"
         build_asar(self.asar, {"a.js": b"aaaa", "b.js": b"bbbb"})
 
-    def test_mismatched_size_invalidates_records(self):
-        side = self.asar.with_name(self.asar.name + ".chart-patch.json")
-        side.write_text(json.dumps({"patches": [
-            {"path": "a.js", "offset": 0, "size": 4, "asar_size": 12345, "original_b64": ""},
-        ]}), encoding="utf-8")
-        self.assertEqual(zp._load_sidecar(side, self.asar.stat().st_size), [])
-        self.assertEqual(len(zp._load_sidecar(side)), 1, "不带指纹时不应过滤")
-
-    def test_refresh_updates_byte_level_offsets(self):
-        side = self.asar.with_name(self.asar.name + ".chart-patch.json")
-        side.write_text(json.dumps({"patches": [
-            {"path": "b.js", "offset": 0, "size": 4,
-             "asar_size": self.asar.stat().st_size, "original_b64": ""},
-        ]}), encoding="utf-8")
-        zp._repack_asar(self.asar, {"a.js": b"aaaaaa"}, set())
-        quiet(zp._refresh_chart_sidecar, self.asar)
-        rec = json.loads(side.read_text(encoding="utf-8"))["patches"][0]
-        _, header, data_start = zp._asar_header_raw(self.asar)
-        ent = zp._asar_find_entry(header, "b.js")
-        self.assertEqual(rec["offset"], data_start + int(ent["offset"]))
-        self.assertEqual(rec["asar_size"], self.asar.stat().st_size)
-
     def test_refresh_updates_repack_level_sidecar_size(self):
-        """TPS/滑条/拉取按钮的 sidecar 只记 asar_size，也要跟着重打包更新。"""
+        """TPS sidecar 只记 asar_size，也要跟着重打包更新。"""
         side = self.asar.with_name(self.asar.name + ".tps-patch.json")
         side.write_text(json.dumps({"asar_size": 1, "script_entry": "x.js"}), encoding="utf-8")
-        quiet(zp._refresh_chart_sidecar, self.asar)
+        quiet(zp._refresh_tps_sidecar, self.asar)
         self.assertEqual(json.loads(side.read_text(encoding="utf-8"))["asar_size"],
                          self.asar.stat().st_size)
-
-
-# ------------------------------------------------------------------ 注入段比对
-
-class TestPullerInjectionState(unittest.TestCase):
-    def test_main_segment_comparison_ignores_leading_newline(self):
-        """回归：注入段以换行开头，比对/剥离必须把它算进去，否则永远误报「版本旧」。"""
-        blob = b"var x=1;\n" + zp._models_main_block("j") + \
-               b"j.handle(E.SaveMcpToUserDirectory,()=>{});"
-        injected, synced, clean, alias = zp._models_main_state(blob)
-        self.assertTrue(injected)
-        self.assertTrue(synced, "main 注入段被误判为旧版")
-        self.assertEqual(alias, "j")
-        self.assertNotIn(b"zcode:read-model-config", clean)
-
-    def test_preload_segment_comparison(self):
-        blob = b"_.contextBridge.exposeInMainWorld(\"zcode\",{" + \
-               zp._models_preload_block("_") + b"other:1});"
-        injected, synced, _clean, alias = zp._models_preload_state(blob)
-        self.assertTrue(injected and synced)
-        self.assertEqual(alias, "_")
-
-    def test_marker_absent_means_not_injected(self):
-        blob = b'_.contextBridge.exposeInMainWorld("zcode",{other:1});'
-        self.assertEqual(zp._models_preload_state(blob)[:2], (False, False))
-
-
-class TestGeneratedJs(unittest.TestCase):
-    """注入到 main/preload 的 JS 是拼接出来的——必须保证拼出来仍是合法 JS。"""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.node = shutil.which("node") or shutil.which("node.exe")
-        if not cls.node:
-            raise unittest.SkipTest("本机没有 node，跳过注入代码语法校验")
-
-    def _check(self, code: str) -> None:
-        with tempfile.TemporaryDirectory() as d:
-            f = Path(d) / "snippet.js"
-            f.write_text(code, encoding="utf-8")
-            r = subprocess.run([self.node, "--check", str(f)], capture_output=True, text=True)
-            self.assertEqual(r.returncode, 0, f"生成的 JS 语法错误：{r.stderr[:300]}")
-
-    def test_main_injection_is_valid_js(self):
-        code = zp._models_main_block("j").decode()
-        self._check(code)
-        self.assertIn("renameSync", code, "配置写入应为原子替换")
-        self.assertIn("oldOrder", code, "modelOrder 应保序")
-        self.assertIn("cleanTargetUrl", code, "应支持针对特定 target 的识别")
-        self.assertIn("isTarget", code, "只有目标供应商才允许新增 rule，严禁复活已删除条目")
-
-    def test_preload_injection_is_valid_js(self):
-        self._check("const o={" + zp._models_preload_block("_").decode()
-                    + zp._enhance_preload_block("_").decode() + "x:1};")
-
-    def test_enhance_preload_exposes_menu_bridges(self):
-        """右键菜单依赖的两个桥方法必须都暴露，且 override 必须能透传。
-
-        缺 `listEnhanceModels` → 菜单打不开；缺 `saveEnhanceModel` → 选了不生效；
-        缺 `override` 形参 → 菜单选了但本次点击仍用旧模型（静默失效）。
-        """
-        code = zp._enhance_preload_block("_").decode()
-        self.assertIn("enhancePrompt", code)
-        self.assertIn("listEnhanceModels", code)
-        self.assertIn("saveEnhanceModel", code)
-        self.assertIn("override:ov", code, "enhancePrompt 必须把 override 透传给主进程")
-        self.assertIn('zcode:enhance-model-save', code)
-
-    def test_enhance_main_injection_is_valid_js(self):
-        code = zp._enhance_main_block("j").decode()
-        self._check(code)
-        self.assertIn("zcode:enhance-prompt", code)
-        self.assertIn("zcode:enhance-model-save", code)
-        self.assertIn("chat/completions", code)
-
-    def test_enhance_resolution_never_ships_models_from_disabled_providers(self):
-        """★ 回归：跨机「HTTP 400 Model is unavailable」的根因。
-
-        旧逻辑在 ref 档失败后会直接进兜底档，把请求打给「第一个带 baseURL 的
-        自定义供应商」—— 与界面所选模型无关，且不检查该供应商是否可用
-        （缺 key / 被 systemDisabledReason 禁用），于是 400。
-        新逻辑必须先过 usable()（baseURL + apiKey + 未禁用），
-        拿不出可用候选时返回可读原因，而不是构造一个注定失败的请求。
-        """
-        code = zp._enhance_main_block("j").decode()
-        self.assertIn("function usable(", code, "必须存在可用性判定")
-        self.assertIn("systemDisabledReason", code, "必须排除被系统禁用的供应商")
-        # 各档解析都必须走 cand()/usable()，不能有任何一条绕过判定直接 pick
-        self.assertIn('cand(pid,mid,"ref")', code)
-        self.assertIn('cand(pid,mid,"ref-label")', code)
-        self.assertIn('cand(pid,mid,"label")', code)
-        self.assertIn('cand(c.pid,mid,"fallback")', code)
-        # 0.6.7 新增的两档（右键菜单 explicit / 热配置 config）同样不得绕过可用性判定
-        self.assertIn('cand(opid,omid,"explicit")', code,
-                      "explicit 档必须经 cand()/usable()，不能无条件采信渲染进程传来的 override")
-        self.assertIn('cand(cpid,cmid,"config")', code,
-                      "config 档必须经 cand()/usable()，配置指向失效供应商时要能回退")
-        self.assertNotIn('pick={pid:pid,mid:mid,p:pp};how="fallback"', code,
-                         "兜底档不得绕过可用性判定")
-        # 失败时必须给出原因与轨迹，前端才能做友好提示
-        self.assertIn('code:"no-model"', code)
-        self.assertIn("tried", code)
-
-    def test_enhance_reads_authoritative_provider_config(self):
-        """★ 回归：客户端真正发请求用的是 provider_config.json，不是 config.json。
-
-        config.json 是遗留副本，可能滞后（供应商缺失、apiKey 过期、模型列表旧）。
-        若只读 config.json，界面选中的 provider/model 可能根本查不到 →
-        掉进兜底档 → 打到别的供应商 → HTTP 400 Model is unavailable。
-        必须 provider_config.json 优先、config.json 兜底。
-        """
-        code = zp._enhance_main_block("j").decode()
-        # 权威源必须被读取，且顺序在 config.json 之前
-        self.assertIn('"provider_config.json"', code, "必须读取 provider_config.json")
-        i_auth = code.index('"provider_config.json"')
-        i_legacy = code.index('"config.json"')
-        self.assertLess(i_auth, i_legacy,
-                        "provider_config.json 必须在 config.json 之前读取（后者仅作兜底）")
-        # 两个配置文件都要解析出候选
-        for key in ("providerConfigRules", "providerRules", "personalModelIds", "modelConfigRules"):
-            self.assertIn(key, code, f"provider_config.json 解析缺少 {key}")
-        # 降级兜底必须把内置/账号级供应商排到最后（优先用户自定义供应商）
-        self.assertIn("builtin:", code)
-        self.assertIn("account:", code)
-        self.assertRegex(code, r"\.sort\(function\(a,b\)\{",
-                         "兜底候选需要排序，用户自定义供应商优先")
-
-    def test_enhance_handler_classifies_errors_and_retries_only_retryable(self):
-        """错误必须分类：model/auth/quota 不重试，超时/限流/5xx 才退避重试。"""
-        code = zp._enhance_main_block("j").decode()
-        self.assertIn("function classify(", code)
-        for kind in ('"model"', '"quota"', '"auth"', '"path"', '"rate"', '"server"'):
-            self.assertIn(f"kind:{kind}", code, f"缺少错误分类 {kind}")
-        self.assertIn("if(!cls.retry)break;", code, "不可重试的错误必须立刻停")
-        # 分类命中「模型不可用」的关键词（上游原样透传的英文/中文都要覆盖）
-        self.assertIn("model is unavailable", code)
-        self.assertIn("model_not_found", code)
-        # 返回体要带 tip，前端据此给「可执行的下一步」
-        self.assertIn("tip:fc.tip", code)
-        self.assertRegex(code, r"for\(let cur of cs\)[\s\S]*setTimeout",
-                         "重试前应有退避等待")
-
-    def test_main_segment_matches_regenerated(self):
-        """注入 → 状态判定 → 再生成，三段必须逐字节一致（否则每次都会白重写）。"""
-        blob = b"var x=1;\n" + zp._models_main_block("j") + b"j.handle(E.SaveMcpToUserDirectory,1);"
-        injected, synced, clean, alias = zp._models_main_state(blob)
-        self.assertTrue(injected and synced)
-        rebuilt = clean[:0] + b"var x=1;\n" + zp._models_main_block(alias) + \
-            b"j.handle(E.SaveMcpToUserDirectory,1);"
-        self.assertEqual(rebuilt, blob)
 
 
 # ------------------------------------------------------------------ 真实安装（只读，可选）
@@ -757,24 +543,14 @@ class TestModuleSurface(unittest.TestCase):
     REQUIRED = [
         # asar 基础
         "_read_asar_header", "_asar_header_raw", "_asar_entry_bytes", "_asar_integrity",
-        "_asar_walk_entries", "_repack_asar", "_asar_sync_integrity", "_load_sidecar",
-        "_refresh_chart_sidecar", "_cleanup_stale_tmp", "_relocate_sidecar",
+        "_asar_walk_entries", "_repack_asar", "_asar_find_entry",
+        "_refresh_tps_sidecar", "_cleanup_stale_tmp",
         # 备份指纹
         "_ensure_backup", "_load_backup_meta", "_mark_backup_patched", "_archive_backup",
         # 补丁入口
-        "process_usage_chart", "process_tps_footer",
-        "process_model_puller", "process_enhance_prompt",
-        "prune_artifacts", "_process_ipc_patch",
-        # 注入块（标记定界）
-        "MODELS_BLOCK", "ENHANCE_BLOCK", "_block_mark", "_wrap_block", "_block_span",
-        "_bridge_block_state",
-        "_models_preload_block", "_models_main_block", "_models_preload_state", "_models_main_state",
-        "_enhance_preload_block", "_enhance_main_block", "_enhance_preload_state", "_enhance_main_state",
-        "PULLER_SPEC", "ENHANCE_SPEC",
+        "process_tps_footer", "prune_artifacts",
         # 路径与辅助常量
-        "_v2_root",
-        "TPS_SCRIPT_PATH", "PULLER_SCRIPT_PATH", "ENHANCE_SCRIPT_PATH",
-        "TPS_TAG", "PULLER_TAG", "ENHANCE_TAG",
+        "TPS_SCRIPT_PATH", "TPS_TAG",
         # --all 一键操作
         "ALL_PATCH_FLAGS", "_expand_all",
     ]
@@ -804,6 +580,15 @@ class TestAllFlag(unittest.TestCase):
                    if "--" + n.replace("_", "-") not in r.stdout]
         self.assertEqual(missing, [], f"这些补丁名不是真实命令行参数：{missing}")
         self.assertIn("--all", r.stdout)
+
+    def test_removed_patch_flags_are_gone(self):
+        """精简后只保留 TPS：旧功能的命令行入口必须彻底消失。"""
+        r = subprocess.run([sys.executable, str(zp.__file__), "--help"],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for flag in ("--usage-chart", "--model-puller", "--enhance-prompt",
+                     "--puller-src", "--enhance-src"):
+            self.assertNotIn(flag, r.stdout)
 
     def test_all_covers_every_plugin_switch(self):
         """插件开关表（sync.py 的 PATCHES）与 --all 必须一一对应，否则
@@ -855,46 +640,16 @@ class TestMarketplaceManifest(unittest.TestCase):
                         f"source {src!r} 解析到 {target}，那里没有 .zcode-plugin/plugin.json")
 
 
-class TestCheckStateWording(unittest.TestCase):
-    """check_state() 必须认得输出措辞。"""
-
-    def _state(self, text: str) -> str:
-        import sync
-
-        class _R:
-            returncode = 0
-            stdout = text
-            stderr = ""
-
-        class _FakeSub:
-            run = staticmethod(lambda *a, **kw: _R())
-
-        orig = sync.subprocess
-        sync.subprocess = _FakeSub          # 只换 sync 里的名字，不动全局 subprocess
-        try:
-            return sync.check_state(["--usage-chart"])
-        finally:
-            sync.subprocess = orig
-
-    def test_byte_level_wording_still_works(self):
-        self.assertEqual(self._state("    [=] a.js | 已打（每日趋势图）"), "on")
-        self.assertEqual(self._state("    [ ] a.js | 未打（每日趋势图）"), "off")
-
-    def test_unrecognized_output_is_unknown(self):
-        self.assertEqual(self._state("完全看不懂的输出"), "unknown")
-
 
 class TestScriptInjectStaleDetection(TempCase):
-    """`--tps-footer` / `--thought-slider` 的 `--check` 必须能报出「脚本是旧版」。
+    """`--tps-footer --check` 必须能报出「脚本是旧版」。
 
     锁死的是一个真实故障：`_process_script_inject` 的 check 分支原先只判
     「index.html 有 tag 且脚本条目存在」，**从不比对脚本内容** —— 于是旧脚本也打
     裸「已打」→ `sync.check_state()` 判 on → `run_sync` 走 `continue`（视为已一致）
     → **脚本改了永远不生效，而且一句报错都没有**。
 
-    这与 `--model-puller` 那条链路（会算 old_script 并输出「含旧版组件」）不一致，
-    正是同一个「静默失效链」的第三个入口。特征串必须逐字一致：
-    `check_state()` 只认「含旧版组件」。
+    特征串必须逐字一致：`check_state()` 只认「含旧版组件」。
     """
 
     INDEX = "out/renderer/index.html"
@@ -1177,235 +932,6 @@ class TestNoConsoleWindowFlags(unittest.TestCase):
                          {"creationflags"} if os.name == "nt" else set())
 
 
-class TestInjectionBlocks(unittest.TestCase):
-    """标记定界注入块：模型拉取与增强提示词共用 preload/main 锚点，必须互不干扰。"""
-
-    def test_block_roundtrip(self):
-        body = b"readConfigFile:()=>x,"
-        blob = b"prefix" + zp._wrap_block("demo", body) + b"suffix"
-        span = zp._block_span(blob, "demo")
-        self.assertIsNotNone(span)
-        i, j = span
-        self.assertEqual(blob[i:j], zp._wrap_block("demo", body))
-        self.assertEqual(blob[:i] + blob[j:], b"prefixsuffix")
-        self.assertIsNone(zp._block_span(blob, "not-there"))
-
-    def test_two_blocks_coexist_and_strip_independently(self):
-        models = zp._models_preload_block("_")
-        enhance = zp._enhance_preload_block("_")
-        blob = (b'_.contextBridge.exposeInMainWorld("zcode",{' + models + enhance + b"other:1});")
-        for block_id, want in ((zp.MODELS_BLOCK, models), (zp.ENHANCE_BLOCK, enhance)):
-            span = zp._block_span(blob, block_id)
-            self.assertIsNotNone(span, block_id)
-            self.assertEqual(blob[span[0]:span[1]], want, block_id)
-        # 摘掉 models 块后，enhance 块内容必须原样保留
-        s = zp._block_span(blob, zp.MODELS_BLOCK)
-        stripped = blob[:s[0]] + blob[s[1]:]
-        self.assertIsNone(zp._block_span(stripped, zp.MODELS_BLOCK))
-        e = zp._block_span(stripped, zp.ENHANCE_BLOCK)
-        self.assertIsNotNone(e)
-        self.assertEqual(stripped[e[0]:e[1]], enhance)
-
-    def test_main_blocks_coexist(self):
-        models = zp._models_main_block("j")
-        enhance = zp._enhance_main_block("j")
-        blob = models + enhance + b"j.handle(E.SaveMcpToUserDirectory,1);"
-        inj, synced, clean, alias = zp._models_main_state(blob)
-        self.assertTrue(inj and synced, "共用锚点时 models 块仍应判定为已同步")
-        self.assertNotIn(b"read-model-config", clean)
-        self.assertIn(zp._enhance_main_block(alias), clean)
-
-    def test_legacy_preload_format_is_migrated(self):
-        """老版本（无标记定界）注入段应判为「存在但需更新」，且能被安全剥离。"""
-        legacy = (b'_.contextBridge.exposeInMainWorld("zcode",{'
-                  b'readConfigFile:()=>_.ipcRenderer.invoke("zcode:read-model-config"),'
-                  b'writeConfigFile:t=>_.ipcRenderer.invoke("zcode:write-model-config",t),'
-                  b'fetchModelsFromUrl:(t,n)=>_.ipcRenderer.invoke("zcode:fetch-models-from-url",'
-                  b'{baseUrl:t,apiKey:n}),other:1});')
-        inj, synced, clean, _alias = zp._models_preload_state(legacy)
-        self.assertTrue(inj)
-        self.assertFalse(synced, "老格式应被判为需要更新（迁移到标记定界）")
-        self.assertNotIn(b"read-model-config", clean)
-        self.assertIn(b"other:1", clean)
-
-    def test_enhance_block_absent_when_not_injected(self):
-        blob = b'_.contextBridge.exposeInMainWorld("zcode",{other:1});'
-        self.assertEqual(zp._enhance_preload_state(blob)[:2], (False, False))
-
-
-class TestEnhancePromptScript(unittest.TestCase):
-    """润色按钮的挂载逻辑：按钮既不能渲染到会话消息区，也不能跑到输入框左上角。
-
-    历史 bug ①：`findInput()` 在**整个 document** 上按 `textarea` /
-    `[contenteditable='true']` 这类通用选择器找「交互输入框」。但客户端的会话消息区
-    （`[data-v4-timeline-scroll]` 内）也会出现这类节点，一旦命中就会：
-      ① 把消息区元素误认成输入框 → 读写正文全错；
-      ② 用它推导挂载点 → 按钮被插进消息流 → 表现为「按钮跑出输入框」。
-    而且输入框 dock（`[data-v4-composer-dock]`）与消息层是**同级兄弟**，
-    都位于滚动容器内，dock 仅靠 `sticky bottom-0` 贴底，所以插错位置后
-    会随消息增长被推到列表底部。
-    修法：所有查找先锚定 dock；兼容模式禁用会误伤消息区的通用选择器。
-
-    历史 bug ②（1.4 修）：挂载点只认「发送按钮的父节点」，取不到就退回
-    **卡片 / dock 本体的 firstChild** —— 那两处都是输入框的祖先，等价于把图标钉在
-    输入框左上角。而发送按钮并非恒存在：内核里提交控件是
-    `sn = canStop && !hasContent ? 停止按钮 : 发送按钮`，所以「输入框为空 + 会话进行中」
-    时它被 `[data-testid='v4-stop']` 替换 → 图标跑到左上角。
-    修法：三级解析（右侧操作区 → 发送/停止按钮父节点 → 工具栏行贴行尾），
-    任何一级都不退回卡片/dock；解析失败保持原位。
-    `tests/enhance_mount_smoke.js` 用最小 DOM 桩把这几个状态真跑一遍。
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        cls.node = shutil.which("node") or shutil.which("node.exe")
-        cls.smoke = _HERE / "enhance_mount_smoke.js"
-        cls.script = None
-        for cand in (_HERE.parent / "scripts",
-                     _HERE.parent / "skills" / "zcode-tokenspeed" / "scripts"):
-            p = cand / "zcode-enhance-prompt.js"
-            if p.is_file():
-                cls.script = p
-                break
-        if cls.script is None:
-            raise unittest.SkipTest("未找到润色脚本")
-
-    def setUp(self):
-        self.src = self.script.read_text(encoding="utf-8")
-
-    def _node(self, *args):
-        return subprocess.run([self.node, *args], capture_output=True,
-                              text=True, encoding="utf-8", errors="replace")
-
-    def test_mount_smoke_passes_in_all_composer_states(self):
-        """把「待机 / 输入框为空 / 会话进行中（发送按钮被停止按钮替换）」等
-        状态真跑一遍，按钮必须始终落在工具栏右侧操作区。"""
-        if not self.node:
-            self.skipTest("本机没有 node，跳过挂载冒烟测试")
-        if not self.smoke.is_file():
-            self.skipTest("未找到 enhance_mount_smoke.js")
-        r = self._node(str(self.smoke), str(self.script))
-        self.assertEqual(r.returncode, 0,
-                         f"挂载冒烟测试失败：{(r.stdout + r.stderr)[:600]}")
-        self.assertIn("enhance mount smoke OK", r.stdout)
-
-    def test_mount_smoke_without_argument_fails_helpfully(self):
-        """缺参数要给「用法」提示并退 2，而不是把 readFileSync 的裸堆栈甩出来。"""
-        if not self.node:
-            self.skipTest("本机没有 node，跳过挂载冒烟测试")
-        if not self.smoke.is_file():
-            self.skipTest("未找到 enhance_mount_smoke.js")
-        r = self._node(str(self.smoke))
-        self.assertEqual(r.returncode, 2, "缺参数应以退出码 2 结束（区别于测试失败）")
-        self.assertIn("用法", r.stderr + r.stdout)
-        self.assertNotIn("ERR_INVALID_ARG_TYPE", r.stderr, "不该把 Node 的裸异常甩出来")
-
-    def test_scopes_input_lookup_to_composer_dock(self):
-        """必须先解析 dock，再在 dock 内找输入框。"""
-        self.assertIn("function findDock(", self.src, "必须存在 dock 解析函数")
-        self.assertIn("data-v4-composer-dock", self.src,
-                      "dock 锚点应使用客户端的 data-v4-composer-dock")
-        # findInput 内必须先拿到 dock，并用 dock.querySelectorAll 而不是 document
-        body = self.src[self.src.index("function findInput("):]
-        body = body[:body.index("\n  function readText")]
-        self.assertIn("findDock()", body, "findInput 必须先锚定 dock")
-        self.assertIn("dock.querySelectorAll", body, "输入框只在 dock 内查找")
-        self.assertLess(body.index("dock.querySelectorAll"),
-                        body.index("document.querySelectorAll"),
-                        "dock 内查找必须排在全局查找之前")
-
-    def test_fallback_never_uses_generic_selectors(self):
-        """兼容模式的全局查找必须排除会误伤消息区的通用选择器。"""
-        body = self.src[self.src.index("function findInput("):]
-        body = body[:body.index("\n  function readText")]
-        # 兼容分支里必须把 textarea / contenteditable 挡掉
-        self.assertIn('sel === "textarea"', body)
-        self.assertIn('[contenteditable=', body)
-        self.assertIn("continue", body)
-        # COMPOSER_INPUT_SELECTORS 里仍保留这些选择器（供 dock 内查找使用），
-        # 但整个 document 直接用它就是 bug
-        self.assertIn("COMPOSER_INPUT_SELECTORS", body)
-
-    def test_host_never_falls_back_to_card_or_dock(self):
-        """挂载点绝不能退回卡片 / dock 本体 —— 那是输入框的祖先。
-
-        历史 bug（0.6.6 修）：旧实现只认 `[data-testid='v4-composer-send']` 当锚点，
-        取不到就 `dock.querySelector("[data-testid='v4-composer']") || … || dock`，
-        再 `host.insertBefore(btn, host.firstChild)` —— 于是图标被钉在**输入框左上角**。
-        而发送按钮并非恒存在：输入框为空 + 会话进行中时，内核用
-        `[data-testid='v4-stop']`（停止）替换它（`sn = canStop && !hasContent`），
-        所以「输入框为空」和「会话进行中」两种情况都会复现。
-        """
-        body = self.src[self.src.index("function ensureButton("):]
-        body = body[:body.index("\n  function start(")]
-        # 不得再出现「越界就回退到 dock 本身」这种兜底
-        self.assertNotIn("host = dock;", body,
-                         "挂载点不得回退到 dock 本体（= 输入框左上角）")
-        self.assertNotIn("!dock.contains(host)", body,
-                         "不应再用「越界回退 dock」的旧校验")
-        # 解析失败时必须保持原位 / 不挂，而不是搬到某个大容器
-        self.assertIn("未找到工具栏操作区", body)
-        # 锚点解析集中在 findMount()，且同时覆盖发送与停止两种按钮
-        self.assertIn("'v4-composer-send'", self.src, "兜底要认发送按钮")
-        self.assertIn("'v4-stop'", self.src,
-                      "生成中发送按钮会被停止按钮替换，必须一并认作锚点")
-        mount = self.src[self.src.index("function findMount("):]
-        mount = mount[:mount.index("\n  /** 落位")]
-        self.assertIn("TRAILING_SELECTOR", mount, "首选锚点应是右侧操作区")
-        self.assertIn("ANCHOR_BUTTON_SELECTORS", mount, "二级锚点是提交控件容器")
-        self.assertIn('where: "append"', mount, "工具栏行兜底只能追加到行尾")
-        self.assertIn("appendChild", self.src, "行尾追加用 appendChild")
-
-    def test_button_self_heals_when_detached_from_dock(self):
-        """客户端重渲染会把按钮搬走 —— 必须能自动搬回来（且记账到 diag）。"""
-        body = self.src[self.src.index("function ensureButton("):]
-        body = body[:body.index("\n  function start(")]
-        self.assertIn("stillInDock", body, "需要判断按钮是否已脱离 dock")
-        self.assertIn("reattaches", body, "自愈次数要记入诊断，便于线上确认")
-        # 自愈分支：先记账，再按解析出的方式搬回，最后 return（不重复创建按钮）
-        m = re.search(
-            r"if \(!okPlace \|\| !stillInDock\) \{([\s\S]*?)\}", body)
-        self.assertIsNotNone(m, "找不到「位置不对就搬回」的分支")
-        branch = m.group(1)
-        self.assertIn("reattaches", branch, "自愈分支要记账")
-        self.assertIn("place(btn, host, mount.where)", branch,
-                      "自愈分支要把按钮搬回挂载点")
-        # 已连接的按钮分支不得重新 createElement（否则会重复插入）
-        self.assertNotIn("createElement", branch, "自愈分支不应重建按钮")
-
-    def test_place_prepends_into_right_side_action_group(self):
-        """落位规则：右侧操作区用 prepend（图标落在发送按钮左侧 = 既有正确位置），
-        只有兜底的工具栏行才 append（贴行尾）。prepend 绝不能作用在行容器上。"""
-        body = self.src[self.src.index("function place("):]
-        body = body[:body.index("\n  // ---------- 按钮 ----------")]
-        self.assertIn('where === "append"', body)
-        self.assertIn("appendChild", body)
-        self.assertIn("insertBefore(el, host.firstChild)", body)
-
-    def test_no_unscoped_generic_query_remains(self):
-        """全局 document 查询里不得再出现裸 textarea / contenteditable。"""
-        for bad in ('document.querySelectorAll("textarea")',
-                    "document.querySelectorAll('[contenteditable='",
-                    'document.querySelectorAll("form textarea")'):
-            self.assertNotIn(bad, self.src,
-                             f"存在会误伤消息区的全局查询：{bad}")
-
-    def test_mount_poll_is_tight_enough_for_streaming(self):
-        """流式输出时消息持续增长，轮询周期必须够短，否则按钮会肉眼可见地错位。"""
-        m = re.search(r"setInterval\(\(\) => \{ if \(!document\.hidden\) ensureButton\(\); \}, (\d+)\)",
-                      self.src)
-        self.assertIsNotNone(m, "找不到挂载轮询")
-        self.assertLessEqual(int(m.group(1)), 1000,
-                             "轮询周期过长：流式对话中按钮会长时间停在错误位置")
-
-    def test_current_model_has_sticky_memory_and_side_pane_isolation(self):
-        """流式生成中模型胶囊瞬态缺失时，必须有会话粘性记忆回退，且全局搜索必须排除侧边栏。"""
-        self.assertIn("lastKnownModel", self.src, "必须具备会话级粘性模型记忆")
-        body = self.src[self.src.index("function currentModel("):]
-        body = body[:body.index("\n  // ---------- 挂载点解析 ----------")]
-        self.assertIn("!isInsideSidePane(e)", body, "全局搜索必须排除侧边栏，防止抓取辅助对话的模型")
-        self.assertIn("lastKnownModel = { value, label }", body, "读取到有效模型时必须更新粘性记忆")
-        self.assertIn("value = lastKnownModel.value", body, "读空时必须回退到粘性记忆")
 
 
 class TestTpsSidePaneIsolation(unittest.TestCase):
@@ -1655,10 +1181,10 @@ class TestSyncModes(unittest.TestCase):
 class TestSyncStaleIsReinjected(unittest.TestCase):
     """★ 回归：「插件更新了，但补丁没跟着更新」这一类**静默失效**（0.6.1 修复）。
 
-    真实故障现场（用户报的：换了台电脑从市场更新插件、退出重启，润色还是不生效）：
+    真实故障现场（用户报的：换了台电脑从市场更新插件、退出重启，状态栏还是不生效）：
       1. 插件市场「更新」只替换**插件目录**，**不会**重新注入 `app.asar`；
       2. 此时 asar 里躺的是上一版的注入片段；
-      3. `--check` 输出「增强提示词注入: **已打**（含旧版组件，重跑可自动更新）」；
+      3. `--check` 输出「TPS 统计栏注入: **已打**（含旧版组件，重跑可自动更新）」；
       4. `check_state()` 只做子串匹配，看到「已打」就返回 `on`；
       5. `run_sync()` 判 `want=True, state=on` → `continue`（视为已一致）；
       6. 结果：**永远不会重跑注入**，用户等多久都不生效，而且日志里一句
@@ -1690,7 +1216,7 @@ class TestSyncStaleIsReinjected(unittest.TestCase):
         """`--check` 说「含旧版组件」时必须是 stale，不能是 on。
 
         这一条盯着的是一个**判断顺序**陷阱：`--check` 的两种措辞
-        「已打（含旧版组件，重跑可自动更新）」与「已打（四组件均为当前版本）」**都含「已打」**。
+        「已打（含旧版组件，重跑可自动更新）」与「已打」**都含「已打」**。
         只要 `if "已打" in out` 排在 `if "含旧版组件" in out` 前面，
         stale 分支就永远走不到 —— 而这正是修复前的状态。
         """
@@ -1713,7 +1239,7 @@ class TestSyncStaleIsReinjected(unittest.TestCase):
 
                 sync.subprocess.run = lambda *a, **k: _R()
                 try:
-                    self.assertEqual(sync.check_state(["--enhance-prompt"]), want,
+                    self.assertEqual(sync.check_state(["--tps-footer"]), want,
                                      f"{text!r} 应判为 {want}")
                 finally:
                     sync.subprocess.run = orig_run
@@ -1737,49 +1263,37 @@ class TestSyncStaleIsReinjected(unittest.TestCase):
     # ---------- run_sync 必须真的重新安排注入 ----------
 
     def test_stale_repack_patch_is_rescheduled_for_watchdog(self):
-        """重打包级补丁（enhance/puller）stale 时必须转交看护，而不是被跳过。"""
-        states = {("--enhance-prompt",): "stale"}
+        """重打包级补丁（TPS）stale 时必须转交看护，而不是被跳过。"""
+        states = {("--tps-footer",): "stale"}
         with patcher_stubbed(self.sync, states=states) as calls:
             summary = quiet(self.sync.run_sync)
         watchdogs = [c for c in calls if c[0] == "watchdog"]
         self.assertEqual(len(watchdogs), 1, f"必须挂载看护，实际调用：{calls}")
-        self.assertTrue(watchdogs[0][1].get("enhance_prompt"),
-                        "看护的 --want 里必须带上 enhance_prompt")
+        self.assertTrue(watchdogs[0][1].get("tps_footer"),
+                        "看护的 --want 里必须带上 tps_footer")
         self.assertIn("重注入为新版", summary,
                       "摘要要说清「插件已更新、退出时重注入」，不能静默")
 
-    def test_stale_non_repack_patch_is_applied_immediately(self):
-        """非重打包级补丁（usage_chart 等）stale 时应当**当场**重跑。"""
-        states = {("--usage-chart",): "stale"}
-        with patcher_stubbed(self.sync, states=states) as calls:
-            summary = quiet(self.sync.run_sync)
-        runs = [c for c in calls if c[0] == "run" and c[1] == ("--usage-chart",)]
-        self.assertEqual(len(runs), 1, f"应当场重跑一次，实际：{calls}")
-        self.assertFalse(runs[0][2], "stale 且 want=True 时不应走还原")
-        self.assertIn("更新为当前版本", summary)
-
     def test_stale_with_switch_off_reverts_instead_of_updating(self):
         """开关是关的、装的却是旧版 → 直接还原（不必先更新再还原绕一圈）。"""
-        states = {("--enhance-prompt",): "stale"}
-        # 让 enhance_prompt 的期望值为 False
+        states = {("--tps-footer",): "stale"}
         orig_resolve = self.sync.resolve_wanted
-        self.sync.resolve_wanted = lambda: ({"enhance_prompt": False}, "测试")
+        self.sync.resolve_wanted = lambda: ({"tps_footer": False}, "测试")
         try:
             with patcher_stubbed(self.sync, states=states) as calls:
                 quiet(self.sync.run_sync)
         finally:
             self.sync.resolve_wanted = orig_resolve
-        runs = [c for c in calls if c[0] == "run" and c[1] == ("--enhance-prompt",)]
+        runs = [c for c in calls if c[0] == "run" and c[1] == ("--tps-footer",)]
         self.assertEqual(len(runs), 1, f"应还原一次，实际：{calls}")
         self.assertTrue(runs[0][2], "want=False 时 revert 必须为 True")
 
     def test_up_to_date_patch_is_left_alone(self):
         """对照组：真正最新的补丁不该被反复重写 —— 否则每次会话启动都重打包 asar。"""
-        states = {("--enhance-prompt",): "on", ("--tps-footer",): "on"}
+        states = {("--tps-footer",): "on"}
         with patcher_stubbed(self.sync, states=states) as calls:
             summary = quiet(self.sync.run_sync)
-        self.assertEqual([c for c in calls if c[0] == "run" and
-                          c[1] == ("--enhance-prompt",)], [],
+        self.assertEqual([c for c in calls if c[0] == "run"], [],
                          "已是最新就不该重跑")
         self.assertNotIn("重注入为新版", summary)
 
@@ -1815,7 +1329,7 @@ class TestRunPatcherVerdict(unittest.TestCase):
 
         self.sync.subprocess.run = lambda *a, **k: _R()
         try:
-            return self.sync.run_patcher(["--reasoning-config"], revert=False)
+            return self.sync.run_patcher(["--tps-footer"], revert=False)
         finally:
             self.sync.subprocess.run = orig
 
@@ -1921,18 +1435,18 @@ class TestSearchMatchesOnlyOurPlugin(unittest.TestCase):
         注意把 -extra 放在前面 —— 修复前的实现会先撞上它。
         """
         cfg = {"plugins": {
-            "zcode-tokenspeed-extra@mkt": {"usage_chart": False, "enhance_prompt": False},
-            "zcode-tokenspeed@mkt": {"usage_chart": True, "enhance_prompt": True},
+            "zcode-tokenspeed-extra@mkt": {"tps_footer": False},
+            "zcode-tokenspeed@mkt": {"tps_footer": True},
         }}
         got = self.sync._search(cfg, "config.json")
         self.assertIsNotNone(got, "应能找到本插件配置")
         val, path = got
         self.assertEqual(path, "config.json.plugins.zcode-tokenspeed@mkt")
-        self.assertTrue(val["enhance_prompt"], "命中串到了 -extra 那份（开关会串台）")
+        self.assertTrue(val["tps_footer"], "命中串到了 -extra 那份（开关会串台）")
 
     def test_search_returns_none_when_only_other_plugins_present(self):
         """只有同前缀的**别的插件**时，不能认领 —— 否则会拿别人的配置去注入。"""
-        cfg = {"plugins": {"zcode-tokenspeed-extra@mkt": {"usage_chart": True}}}
+        cfg = {"plugins": {"zcode-tokenspeed-extra@mkt": {"tps_footer": True}}}
         self.assertIsNone(self.sync._search(cfg, "config.json"))
 
 
@@ -1977,7 +1491,7 @@ class TestPluginBoundaryStopsAtPluginRoot(unittest.TestCase):
         """对照组：边界收紧后，本仓库仍必须能正常取到默认值（不能修坏）。"""
         d = self.sync.declared_defaults()
         self.assertTrue(d, "本仓库应能读到插件清单默认值")
-        self.assertIn("enhance_prompt", d)
+        self.assertIn("tps_footer", d)
         self.assertTrue(all(isinstance(v, bool) for v in d.values()))
 
     def test_manifest_of_another_plugin_is_skipped(self):
@@ -1990,7 +1504,7 @@ class TestPluginBoundaryStopsAtPluginRoot(unittest.TestCase):
         (d / ".zcode-plugin").mkdir(parents=True)
         (d / ".zcode-plugin" / "plugin.json").write_text(
             json.dumps({"name": "some-other-plugin",
-                        "userConfig": {"enhance_prompt": {"default": False}}}),
+                        "userConfig": {"tps_footer": {"default": False}}}),
             encoding="utf-8")
         orig = self.sync.HERE
         # 让脚本目录位于 d/x/y/scripts，使 d 落在向上搜索范围内
@@ -2001,7 +1515,7 @@ class TestPluginBoundaryStopsAtPluginRoot(unittest.TestCase):
             got = self.sync.declared_defaults()
         finally:
             self.sync.HERE = orig
-        self.assertNotIn("enhance_prompt", got,
+        self.assertNotIn("tps_footer", got,
                          "用了别的插件的清单（name 校验失效）")
 
 
@@ -2027,12 +1541,16 @@ class TestAutoInject(unittest.TestCase):
     def _resolve(self, opts, source, defaults):
         """在受控输入下跑 resolve_wanted()。"""
         orig = (self.sync.read_options, self.sync.declared_defaults)
+        orig_keys = self.sync.PATCH_KEYS
         self.sync.read_options = lambda: (opts, source)
         self.sync.declared_defaults = lambda: defaults
+        # 用合成键验证合并算法本身；真实插件只有 tps_footer
+        self.sync.PATCH_KEYS = orig_keys | {"a", "b", "new"}
         try:
             return self.sync.resolve_wanted()
         finally:
             self.sync.read_options, self.sync.declared_defaults = orig
+            self.sync.PATCH_KEYS = orig_keys
 
     def _switch_keys(self):
         return {key for key, _args, _repack in self.sync.PATCHES}
@@ -2140,10 +1658,10 @@ class TestAutoInject(unittest.TestCase):
     def test_run_sync_skips_switches_that_do_not_apply(self):
         """na 的开关既不执行也不报错，只在结论里注明「本版本不适用」。"""
         orig = (self.sync.read_options, self.sync.declared_defaults)
-        self.sync.read_options = lambda: ({"usage_chart": True}, "config")
+        self.sync.read_options = lambda: ({"tps_footer": True}, "config")
         self.sync.declared_defaults = lambda: {}
         try:
-            with patcher_stubbed(self.sync, {("--usage-chart",): "na"}) as calls:
+            with patcher_stubbed(self.sync, {("--tps-footer",): "na"}) as calls:
                 summary = self.sync.run_sync(echo=False)
         finally:
             self.sync.read_options, self.sync.declared_defaults = orig
@@ -2154,10 +1672,10 @@ class TestAutoInject(unittest.TestCase):
     def test_na_is_skipped_even_when_user_asked_for_it(self):
         """用户显式打开也不该去跑不适用的补丁——照样只标注、不执行。"""
         orig = (self.sync.read_options, self.sync.declared_defaults)
-        self.sync.read_options = lambda: ({"usage_chart": False}, "config")
+        self.sync.read_options = lambda: ({"tps_footer": False}, "config")
         self.sync.declared_defaults = lambda: {}
         try:
-            with patcher_stubbed(self.sync, {("--usage-chart",): "na"}) as calls:
+            with patcher_stubbed(self.sync, {("--tps-footer",): "na"}) as calls:
                 summary = self.sync.run_sync(echo=False)
         finally:
             self.sync.read_options, self.sync.declared_defaults = orig
@@ -2173,102 +1691,98 @@ class TestAutoInject(unittest.TestCase):
         self.sync.declared_defaults = lambda: {}
         return orig
 
-    def test_refused_write_is_deferred_not_reported_as_failure(self):
-        """客户端在运行 → zcode_patcher.py 直接拒绝写入（exit 2）。
+    def test_repack_patch_is_deferred_not_run_inline(self):
+        """TPS 属重打包级：即使用户开着，也必须转交 apply_after_exit.py。
 
-        这不是失败，而是「现在不能写，等退出后写」：必须转交 apply_after_exit.py。
-        否则用户看到的就是「未处理: xxx(执行失败)」而**永远不生效** ——
-        SessionStart 钩子必然在 ZCode 运行中触发，所以这条路是常态而非例外。
+        SessionStart 钩子必然在 ZCode 运行中触发，此时当场执行只会被预检拒绝；
+        直接排期给看护才是常态路径，也不能报成「未处理」。
         """
-        orig = self._resolve_only({"usage_chart": True})
+        orig = self._resolve_only({"tps_footer": True})
         try:
-            with patcher_stubbed(self.sync,
-                                 {("--usage-chart",): "off"},
-                                 {("--usage-chart",): "refused"}) as calls:
+            with patcher_stubbed(self.sync, {("--tps-footer",): "off"}) as calls:
                 summary = self.sync.run_sync(echo=False)
         finally:
             self.sync.read_options, self.sync.declared_defaults = orig
-        self.assertEqual(calls, [("run", ("--usage-chart",), False),
-                                 ("watchdog", {"usage_chart": True})])
+        self.assertEqual(calls, [("watchdog", {"tps_footer": True})])
         self.assertNotIn("未处理", summary)
         self.assertIn("ZCode 退出时写入", summary)
 
     def test_hard_failure_is_still_reported(self):
-        """真正的失败（锚点不匹配等）不能被「被拒」这条新分支吞掉。"""
-        orig = self._resolve_only({"usage_chart": True})
+        """真正的失败（锚点不匹配等）不能被看护分支吞掉。"""
+        orig = self._resolve_only({"tps_footer": False})
         try:
             with patcher_stubbed(self.sync,
-                                 {("--usage-chart",): "off"},
-                                 {("--usage-chart",): "fail"}) as calls:
+                                 {("--tps-footer",): "stale"},
+                                 {("--tps-footer",): "fail"}) as calls:
                 summary = self.sync.run_sync(echo=False)
         finally:
             self.sync.read_options, self.sync.declared_defaults = orig
         self.assertIn("未处理", summary)
-        self.assertEqual([c[0] for c in calls], ["run"], "失败不该起看护")
+        self.assertEqual([c[0] for c in calls], ["run"], "还原失败时不该起看护")
 
     def test_env_option_keys_are_lowercased(self):
         """Windows 上 os.environ 的键名是**大写**，读配置时必须归一。
 
-        不归一的话 `ZCODE_PLUGIN_CONFIG_model_width` 会变成 `MODEL_WIDTH`，
-        与开关名对不上 → `{**defaults, **explicit}` 里默认值（全 true）胜出，
+        不归一的话 `ZCODE_PLUGIN_CONFIG_tps_footer` 会变成 `TPS_FOOTER`，
+        与开关名对不上 → `{**defaults, **explicit}` 里默认值（true）胜出，
         **用户保存的开关会被整体忽略**（静默失效，最难查）。
         """
         from unittest import mock
-        env = {"ZCODE_PLUGIN_CONFIG_TPS_FOOTER": "false",
-               "ZCODE_PLUGIN_CONFIG_USAGE_CHART": "true"}
+        env = {"ZCODE_PLUGIN_CONFIG_TPS_FOOTER": "false"}
         with mock.patch.dict("os.environ", env, clear=False):
             opts, source = self.sync.read_options()
         self.assertEqual(source, "env")
-        self.assertEqual(opts, {"tps_footer": False, "usage_chart": True})
+        self.assertEqual(opts, {"tps_footer": False})
 
     def test_watchdog_knows_every_switch(self):
         """apply_after_exit 的参数表必须覆盖 sync.PATCHES 的每一个键。
 
         漏一个键的后果：`--want=<键>=on` 被 parse_wants 当「未知开关」忽略，
-        那个开关**开不起来也关不干净**（enhance_prompt 就漏过这一条）。
+        那个开关**开不起来也关不干净**。
         """
         import apply_after_exit as aae
         self.assertEqual({k for k, _a, _r in self.sync.PATCHES} - set(aae.PATCH_ARGS),
                          set(), "apply_after_exit.PATCH_ARGS 漏了开关，退出后看护会静默忽略它")
 
+    def test_watchdog_ignores_removed_switch_keys(self):
+        """旧版留下的 _watchdog.want 可能含已移除功能的键，必须忽略而不是 KeyError。"""
+        import apply_after_exit as aae
+        with tempfile.TemporaryDirectory() as d:
+            want_file = Path(d) / "_watchdog.want"
+            want_file.write_text(json.dumps({
+                "legacy_a": True,
+                "legacy_b": True,
+                "legacy_c": True,
+                "tps_footer": True,
+            }), encoding="utf-8")
+            orig = aae.WANT_FILE
+            aae.WANT_FILE = want_file
+            try:
+                tasks = aae.parse_wants([])
+            finally:
+                aae.WANT_FILE = orig
+        self.assertEqual(tasks, [(["--tps-footer"], False)])
+
     def test_watchdog_batch_tasks_merges_repack_invocations(self):
-        """看护必须将同方向的补丁参数合并为批量调用，避免多次解包/重打包 asar 导致 20s+ 耗时。"""
+        """看护必须将同方向的补丁参数合并为批量调用，避免多次重打包 asar。"""
         import apply_after_exit as aae
 
-        # ① 全量默认任务（4项全部应用）应合并为 1 次批量调用
+        # ① 默认任务应合并为 1 次调用
         default_tasks = [(args, False) for args in aae.DEFAULT_TASKS]
         batched = aae.batch_tasks(default_tasks)
-        self.assertEqual(len(batched), 1, "全量 4 项应用任务应合并为单次调用")
-        args, rev = batched[0]
-        self.assertFalse(rev)
-        self.assertIn("--tps-footer", args)
-        self.assertIn("--enhance-prompt", args)
-        self.assertIn("--model-puller", args)
-        self.assertIn("--usage-chart", args)
-        self.assertEqual(len(args), 4)
+        self.assertEqual(batched, [(["--tps-footer"], False)])
 
-        # ② 混合任务：关闭项走一次 revert，开启项走一次 apply（先还原后应用）
-        mixed_tasks = [
-            (["--tps-footer"], False),
-            (["--enhance-prompt"], True),
-            (["--model-puller"], False),
-        ]
+        # ② 重复参数去重后仍只调用一次
+        duplicate_tasks = [(["--tps-footer"], False), (["--tps-footer"], False)]
+        self.assertEqual(aae.batch_tasks(duplicate_tasks),
+                         [(["--tps-footer"], False)])
+
+        # ③ 关闭项先还原、开启项后应用
+        mixed_tasks = [(["--tps-footer"], False), (["--tps-footer"], True)]
         batched_mixed = aae.batch_tasks(mixed_tasks)
-        self.assertEqual(len(batched_mixed), 2, "混合任务应分为 1 次还原和 1 次应用")
-        # 第 1 步先还原
-        self.assertEqual(batched_mixed[0], (["--enhance-prompt"], True))
-        # 第 2 步后应用
-        self.assertEqual(batched_mixed[1], (["--tps-footer", "--model-puller"], False))
+        self.assertEqual(batched_mixed,
+                         [(["--tps-footer"], True), (["--tps-footer"], False)])
 
-        # ③ 内核补丁（空参数项）保持独立调用，不与 asar 标志混杂
-        core_tasks = [
-            (["--tps-footer"], False),
-            ([], False),
-        ]
-        batched_core = aae.batch_tasks(core_tasks)
-        self.assertEqual(len(batched_core), 2)
-        self.assertEqual(batched_core[0], (["--tps-footer"], False))
-        self.assertEqual(batched_core[1], ([], False))
 
 class TestDoctorDiscovery(unittest.TestCase):
     """doctor 必须能认出「插件根 = 市场根」这种安装（marketplace.json 里 `source: "./"`）。
@@ -2431,7 +1945,7 @@ class TestConsoleEncoding(unittest.TestCase):
     这时 print 一个 GBK 里没有的字符会抛 UnicodeEncodeError，**把整段输出打断**。
 
     真实故障：doctor.py 捕获 zcode_patcher.py 的输出，汇总表在
-    `✓ 用量页去截断补丁` 那一行崩掉，用户只看到半张表 + traceback，
+    `✓ TPS 统计栏注入` 那一行崩掉，用户只看到半张表 + traceback，
     还以为是补丁本身失败。交互式控制台不受影响，所以这个坑**只在管道里露头**，
     平时手动跑脚本永远测不出来。
     """
@@ -2496,7 +2010,7 @@ class TestConsoleEncoding(unittest.TestCase):
         self.assertNotIn("UnicodeEncodeError", out, out[-600:])
         self.assertNotIn("Traceback", out, out[-600:])
         self.assertIn("执行汇总", out)
-        self.assertIn("合计 4 项", out)
+        self.assertIn("合计 1 项", out)
 
 
 class TestZcodeLogScan(unittest.TestCase):
@@ -2766,7 +2280,7 @@ class TestDoctorWatchdogSection(unittest.TestCase):
     # 正常完成：等到了退出、处理完、已重启
     _COMPLETED = (
         "[2026-09-23 15:03:55] 看护启动，等待 ZCode 退出…\n"
-        "[2026-09-23 15:04:12] ZCode 已退出（等待 15s），开始处理：应用 --enhance-prompt\n"
+        "[2026-09-23 15:04:12] ZCode 已退出（等待 15s），开始处理：应用 --tps-footer\n"
         "[2026-09-23 15:04:20] 处理完成（失败 0 项），重启 ZCode\n"
         "[2026-09-23 15:04:20] DONE\n"
     )
@@ -3139,8 +2653,7 @@ class TestBootstrapScript(unittest.TestCase):
         self.assertIn("def find_node(", self._src)
         # 找不到 Node 的分支必须是「跳过」，不是 die()
         self.assertIn("Node（可选）", self._src)
-        self.assertIn("跳过已有脚本", self._src.replace("跳过注入脚本", "跳过已有脚本")
-                      .replace("跳过滑条冒烟", "跳过已有脚本"))
+        self.assertIn("跳过已有脚本", self._src.replace("跳过注入脚本", "跳过已有脚本"))
 
     # ---------- 3. 跨平台执行细节 ----------
 
