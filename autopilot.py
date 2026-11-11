@@ -60,6 +60,13 @@ SCRIPTS = HERE / "skills" / "zcode-tokenspeed" / "scripts"
 TESTS = HERE / "tests"
 LOGDIR = HERE / "logs"
 
+try:
+    sys.path.insert(0, str(SCRIPTS))
+    from _console import safe_stdio
+    safe_stdio()
+except Exception:
+    pass
+
 PY_MIN = (3, 10)
 PATCHER = SCRIPTS / "zcode_patcher.py"
 DOCTOR = SCRIPTS / "doctor.py"
