@@ -56,7 +56,7 @@ from pathlib import Path
 # --------------------------------------------------------------------------- #
 
 HERE = Path(__file__).resolve().parent           # 仓库根 = 本脚本所在目录
-SCRIPTS = HERE / "skills" / "zcode-tokenspeed" / "scripts"
+SCRIPTS = HERE / "scripts"
 TESTS = HERE / "tests"
 LOGDIR = HERE / "logs"
 
@@ -693,7 +693,7 @@ def step_env(log: Logger, dry_run: bool) -> None:
 
     if not SCRIPTS.is_dir():
         raise StepFailure(f"找不到脚本目录：{SCRIPTS}\n"
-                          f"    请确认本脚本位于仓库根目录（与 skills/ 同级）。",
+                          f"    请确认本脚本位于仓库根目录，且 scripts/ 目录完整。",
                           kind=ErrorKind.ENV)
     log.ok(f"目录结构完整，Python 版本达标（>= {PY_MIN[0]}.{PY_MIN[1]}）")
 

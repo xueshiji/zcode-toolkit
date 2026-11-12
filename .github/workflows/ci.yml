@@ -51,21 +51,14 @@ jobs:
         shell: bash
         run: |
           set -e
-          # 目录名兼容两种仓库布局：扁平 scripts/ 与插件 skills/zcode-tokenspeed/scripts/
-          for d in scripts skills/zcode-tokenspeed/scripts; do
-            [ -d "$d" ] || continue
-            python -m py_compile "$d"/*.py
-          done
+          python -m py_compile scripts/*.py
 
       - name: 语法检查（注入脚本，回退路径）
         if: hashFiles('autopilot.py') == ''
         shell: bash
         run: |
           set -e
-          for d in scripts skills/zcode-tokenspeed/scripts; do
-            [ -d "$d" ] || continue
-            for f in "$d"/*.js; do node --check "$f"; done
-          done
+          for f in scripts/*.js; do node --check "$f"; done
 
       - name: 回归测试（回退路径）
         if: hashFiles('autopilot.py') == ''

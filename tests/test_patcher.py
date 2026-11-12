@@ -30,13 +30,11 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-# 兼容两种仓库布局：扁平（scripts/）与插件（skills/zcode-tokenspeed/scripts/）
 _HERE = Path(__file__).resolve().parent
-for _cand in (_HERE.parent / "scripts",
-              _HERE.parent / "skills" / "zcode-tokenspeed" / "scripts"):
-    if (_cand / "zcode_patcher.py").is_file():
-        sys.path.insert(0, str(_cand))
-        break
+_SCRIPTS = _HERE.parent / "scripts"
+if not (_SCRIPTS / "zcode_patcher.py").is_file():
+    raise SystemExit(f"找不到脚本目录：{_SCRIPTS}")
+sys.path.insert(0, str(_SCRIPTS))
 import zcode_patcher as zp          # noqa: E402
 
 
@@ -639,6 +637,13 @@ class TestMarketplaceManifest(unittest.TestCase):
         self.assertTrue((target / ".zcode-plugin" / "plugin.json").is_file(),
                         f"source {src!r} 解析到 {target}，那里没有 .zcode-plugin/plugin.json")
 
+    def test_manifest_publishes_no_ai_components(self):
+        """插件只贡献后台钩子和配置，不应向会话暴露命令或技能。"""
+        self.assertNotIn("skills", self.manifest)
+        self.assertNotIn("commands", self.manifest)
+        self.assertFalse((self.root / "commands").exists())
+        self.assertFalse((self.root / "skills" / self.manifest["name"] / "SKILL.md").exists())
+        self.assertTrue((self.root / "scripts" / "sync.py").is_file())
 
 
 class TestScriptInjectStaleDetection(TempCase):
@@ -907,7 +912,7 @@ class TestNoConsoleWindowFlags(unittest.TestCase):
         return found
 
     def test_every_subprocess_call_suppresses_the_console_window(self):
-        d = _HERE.parent / "skills" / "zcode-tokenspeed" / "scripts"
+        d = _HERE.parent / "scripts"
         if not d.is_dir():
             self.skipTest("非插件形态布局")
         offenders = []
@@ -940,7 +945,7 @@ class TestTpsSidePaneIsolation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.script = (Path(__file__).resolve().parent.parent
-                      / "skills" / "zcode-tokenspeed" / "scripts" / "zcode-tps.js")
+                      / "scripts" / "zcode-tps.js")
         cls.src = cls.script.read_text(encoding="utf-8")
 
     def test_side_pane_detection_guards_exist(self):
@@ -1081,17 +1086,15 @@ class TestSyncHeartbeat(unittest.TestCase):
     def setUp(self):
         import sync
         self.sync = sync
-        self._orig = (sync.CONFIG, sync.STAMP, sync.LOG, sync.MARKER)
+        self._orig = (sync.CONFIG, sync.STAMP, sync.LOG)
         self._tmp = tempfile.TemporaryDirectory(prefix="zpatch-hb-", ignore_cleanup_errors=True)
         d = Path(self._tmp.name)
         sync.CONFIG = d / "config.json"       # 故意不存在
         sync.STAMP = d / "_sync.last"
         sync.LOG = d / "_sync.log"
-        sync.MARKER = d / "_autoinject.done"  # 别把标记写进真实安装目录
 
     def tearDown(self):
-        (self.sync.CONFIG, self.sync.STAMP, self.sync.LOG,
-         self.sync.MARKER) = self._orig
+        self.sync.CONFIG, self.sync.STAMP, self.sync.LOG = self._orig
         self._tmp.cleanup()
 
     def test_beat_writes_timestamp_and_message(self):
@@ -1136,18 +1139,16 @@ class TestSyncModes(unittest.TestCase):
     def setUp(self):
         import sync
         self.sync = sync
-        self._orig = (sync.CONFIG, sync.STAMP, sync.LOG, sync.MARKER, list(sys.argv))
+        self._orig = (sync.CONFIG, sync.STAMP, sync.LOG, list(sys.argv))
         self._tmp = tempfile.TemporaryDirectory(prefix="zpatch-mode-", ignore_cleanup_errors=True)
         d = Path(self._tmp.name)
         sync.CONFIG = d / "config.json"       # 故意不存在
         sync.STAMP = d / "_sync.last"
         sync.LOG = d / "_sync.log"
-        sync.MARKER = d / "_autoinject.done"  # 别把标记写进真实安装目录
 
     def tearDown(self):
-        (self.sync.CONFIG, self.sync.STAMP, self.sync.LOG,
-         self.sync.MARKER) = self._orig[:4]
-        sys.argv[:] = self._orig[4]
+        self.sync.CONFIG, self.sync.STAMP, self.sync.LOG = self._orig[:3]
+        sys.argv[:] = self._orig[3]
         self._tmp.cleanup()
 
     def _run(self, *args):
@@ -1165,6 +1166,20 @@ class TestSyncModes(unittest.TestCase):
             self.sync.spawn_detached = orig
         self.assertEqual(spawned, [["--worker", "--from-hook"]])
         self.assertIn("[钩子]", self.sync.STAMP.read_text(encoding="utf-8"))
+
+    def test_detach_writes_no_hook_context(self):
+        """钩子正常路径不能向会话输出 additionalContext 或其他文本。"""
+        orig = self.sync.spawn_detached
+        self.sync.spawn_detached = lambda extra: True
+        buf = io.StringIO()
+        try:
+            with patcher_stubbed(self.sync):
+                sys.argv[:] = ["sync.py", "--detach"]
+                with contextlib.redirect_stdout(buf):
+                    self.sync.main()
+        finally:
+            self.sync.spawn_detached = orig
+        self.assertEqual(buf.getvalue(), "")
 
     def test_detach_falls_back_to_foreground_when_spawn_fails(self):
         """后台起不来（比如被安全软件拦）时必须自己把活干完，而不是静默失败。"""
@@ -1214,17 +1229,15 @@ class TestSyncStaleIsReinjected(unittest.TestCase):
     def setUp(self):
         import sync
         self.sync = sync
-        self._orig = (sync.CONFIG, sync.STAMP, sync.LOG, sync.MARKER)
+        self._orig = (sync.CONFIG, sync.STAMP, sync.LOG)
         self._tmp = tempfile.TemporaryDirectory(prefix="zpatch-stale-", ignore_cleanup_errors=True)
         d = Path(self._tmp.name)
         sync.CONFIG = d / "config.json"        # 不存在 → 走插件清单默认值（全开）
         sync.STAMP = d / "_sync.last"
         sync.LOG = d / "_sync.log"
-        sync.MARKER = d / "_autoinject.done"
 
     def tearDown(self):
-        (self.sync.CONFIG, self.sync.STAMP, self.sync.LOG,
-         self.sync.MARKER) = self._orig
+        self.sync.CONFIG, self.sync.STAMP, self.sync.LOG = self._orig
         self._tmp.cleanup()
 
     # ---------- check_state 必须把「内容旧」和「已最新」分开 ----------
@@ -1467,73 +1480,53 @@ class TestSearchMatchesOnlyOurPlugin(unittest.TestCase):
         self.assertIsNone(self.sync._search(cfg, "config.json"))
 
 
-class TestPluginBoundaryStopsAtPluginRoot(unittest.TestCase):
-    """★ 回归：向上找插件清单必须**到插件根为止**（0.6.3 修复）。
-
-    原实现无条件 `list(HERE.parents)[2:6]`。在仓库布局下（市场根即插件根）
-    `parents` 只有 5 层，于是搜索范围会一路包含 **盘符根**（`F:\\`）。
-    用户把压缩包解到盘符根是很常见的操作 —— 一旦那里躺着一个无关的
-    `.zcode-plugin/plugin.json`，`declared_defaults()` 就会用**它的** `userConfig`
-    决定本插件的开关默认值，而且**完全不报错**（只表现为「开关状态莫名其妙」）。
-
-    另外还加了「清单必须是本插件的」校验：上级目录里出现任何别的清单时，
-    不能因为「它先被扫到」就用它的默认值。
-    """
+class TestPluginManifestDefaults(unittest.TestCase):
+    """插件根固定为脚本目录的父目录，只读取这一层的清单。"""
 
     def setUp(self):
         import sync
         self.sync = sync
 
-    def test_boundary_never_includes_filesystem_root(self):
-        """盘符根 / 文件系统根绝不能出现在搜索范围内。"""
-        for p in self.sync._plugin_boundary():
-            self.assertNotEqual(p, p.parent,
-                                f"边界里出现了文件系统根：{p}")
-            self.assertTrue(p.is_dir(), f"边界项应是已存在目录：{p}")
-
-    def test_boundary_stops_at_the_plugin_root(self):
-        """本仓库布局下，第一处「含 skills/<插件名>」的目录就是插件根，必须到此为止。
-
-        它后面的目录（skills/ 的父、盘的父……）都只可能放着无关清单。
-        """
-        b = self.sync._plugin_boundary()
-        roots = [p for p in b if (p / "skills" / self.sync.PLUGIN_ID_PREFIX).is_dir()]
-        self.assertTrue(roots, "应能识别出插件根（含 skills/<插件名>）")
-        self.assertIn(roots[0], b, "插件根必须在搜索范围内")
-        # 插件根之后不应再有更上层目录
-        self.assertEqual(b[-1], roots[0],
-                         f"插件根 {roots[0]} 之后仍继续向上找了：{b}")
-
-    def test_repo_layout_still_finds_defaults(self):
-        """对照组：边界收紧后，本仓库仍必须能正常取到默认值（不能修坏）。"""
-        d = self.sync.declared_defaults()
-        self.assertTrue(d, "本仓库应能读到插件清单默认值")
-        self.assertIn("tps_footer", d)
-        self.assertTrue(all(isinstance(v, bool) for v in d.values()))
+    def test_repo_layout_finds_defaults(self):
+        defaults = self.sync.declared_defaults()
+        self.assertIn("tps_footer", defaults)
+        self.assertTrue(all(isinstance(v, bool) for v in defaults.values()))
 
     def test_manifest_of_another_plugin_is_skipped(self):
-        """上级目录里出现别人的清单时，必须跳过而不是拿它的默认值。"""
-        tmp = tempfile.TemporaryDirectory(prefix="zpatch-boundary-",
-                                          ignore_cleanup_errors=True)
-        self.addCleanup(tmp.cleanup)
-        d = Path(tmp.name)
-        # 造一个「别的插件」的清单放在某层，name 对不上
-        (d / ".zcode-plugin").mkdir(parents=True)
-        (d / ".zcode-plugin" / "plugin.json").write_text(
-            json.dumps({"name": "some-other-plugin",
-                        "userConfig": {"tps_footer": {"default": False}}}),
-            encoding="utf-8")
-        orig = self.sync.HERE
-        # 让脚本目录位于 d/x/y/scripts，使 d 落在向上搜索范围内
-        sd = d / "x" / "y" / "scripts"
-        sd.mkdir(parents=True)
-        self.sync.HERE = sd
-        try:
-            got = self.sync.declared_defaults()
-        finally:
-            self.sync.HERE = orig
-        self.assertNotIn("tps_footer", got,
-                         "用了别的插件的清单（name 校验失效）")
+        with tempfile.TemporaryDirectory(prefix="zpatch-manifest-",
+                                          ignore_cleanup_errors=True) as d:
+            root = Path(d)
+            (root / ".zcode-plugin").mkdir()
+            (root / ".zcode-plugin" / "plugin.json").write_text(
+                json.dumps({"name": "some-other-plugin",
+                            "userConfig": {"tps_footer": {"default": False}}}),
+                encoding="utf-8")
+            scripts = root / "scripts"
+            scripts.mkdir()
+            orig = self.sync.HERE
+            self.sync.HERE = scripts
+            try:
+                self.assertEqual(self.sync.declared_defaults(), {})
+            finally:
+                self.sync.HERE = orig
+
+    def test_manifest_outside_plugin_root_is_ignored(self):
+        with tempfile.TemporaryDirectory(prefix="zpatch-manifest-",
+                                          ignore_cleanup_errors=True) as d:
+            parent = Path(d)
+            (parent / ".zcode-plugin").mkdir()
+            (parent / ".zcode-plugin" / "plugin.json").write_text(
+                json.dumps({"name": "zcode-tokenspeed",
+                            "userConfig": {"tps_footer": {"default": True}}}),
+                encoding="utf-8")
+            scripts = parent / "plugin" / "scripts"
+            scripts.mkdir(parents=True)
+            orig = self.sync.HERE
+            self.sync.HERE = scripts
+            try:
+                self.assertEqual(self.sync.declared_defaults(), {})
+            finally:
+                self.sync.HERE = orig
 
 
 class TestAutoInject(unittest.TestCase):
@@ -1604,7 +1597,7 @@ class TestAutoInject(unittest.TestCase):
             "userConfig": {"a": {"default": True}, "b": {"default": "high"},
                            "c": {"default": False}, "d": {"no_default": 1}},
         }), encoding="utf-8")
-        scripts = root / "skills" / "zcode-tokenspeed" / "scripts"
+        scripts = root / "scripts"
         scripts.mkdir(parents=True)
         orig = self.sync.HERE
         self.sync.HERE = scripts
@@ -1614,7 +1607,7 @@ class TestAutoInject(unittest.TestCase):
             self.sync.HERE = orig
 
     def test_declared_defaults_without_manifest_is_empty(self):
-        scripts = self._d / "lonely" / "skills" / "zcode-tokenspeed" / "scripts"
+        scripts = self._d / "lonely" / "scripts"
         scripts.mkdir(parents=True)
         orig = self.sync.HERE
         self.sync.HERE = scripts
@@ -1859,8 +1852,8 @@ class TestDoctorDiscovery(unittest.TestCase):
         `cache/<市场名>/<插件名>/<版本>/` —— 插件根在**版本目录**里。
 
         实测本机 `cache/zcode-plugins-official/computer-use/0.5.13/.zcode-plugin/plugin.json`。
-        用户从 `cache/zcode-toolkit` 敲 `python skills/.../doctor.py` 报 No such file，
-        就是因为那一层是**市场目录**，根本没有 skills/。
+        用户站在 `cache/zcode-toolkit` 敲相对路径会找不到脚本，因为脚本在版本目录的
+        `scripts/` 下，而不是市场目录那一层。
         """
         with tempfile.TemporaryDirectory() as d:
             storage = Path(d)
@@ -1916,6 +1909,8 @@ class TestDoctorDiscovery(unittest.TestCase):
             root = (storage / "cli" / "plugins" / "cache"
                     / "zcode-toolkit" / "zcode-tokenspeed" / "0.5.2")
             self._make_plugin(root, "0.5.2")
+            (root / "scripts").mkdir()
+            (root / "scripts" / "doctor.py").write_text("", encoding="utf-8")
             # 一堆噪声：别的插件不该出现在默认输出里
             for n in ("android-emulator", "browser-use", "computer-use"):
                 other = storage / "cli" / "plugins" / "cache" / "zcode-plugins-official" / n / "0.1.0"
@@ -1926,7 +1921,7 @@ class TestDoctorDiscovery(unittest.TestCase):
             self.assertIn(str(root), out)
             self.assertIn("0.5.2", out)
             self.assertIn("doctor.py", out)          # 给出了可直接复制的命令
-            self.assertIn(str(Path("skills") / "zcode-tokenspeed" / "scripts"), out)
+            self.assertIn(str(root / "scripts"), out)
             self.assertNotIn("browser-use", out)     # 默认不列别人的插件
             self.assertIn("--where-all", out)        # 想看全量时告诉用户怎么开
 
@@ -2254,7 +2249,7 @@ class TestDoctorFlagsStaleInjection(unittest.TestCase):
         「全绿但不生效」的老坑。所以在这里把措辞本身钉死。
         """
         src = (Path(__file__).resolve().parent.parent
-               / "skills" / "zcode-tokenspeed" / "scripts" / "zcode_patcher.py")
+               / "scripts" / "zcode_patcher.py")
         text = src.read_text(encoding="utf-8")
         self.assertIn("含旧版组件，重跑可自动更新", text,
                       "zcode_patcher.py 改变了旧版组件的措辞；"
@@ -2342,7 +2337,7 @@ class TestDoctorWatchdogSection(unittest.TestCase):
     def test_section_runs_in_full_doctor(self):
         """第 7.5 节要被 main() 真正调用 —— 只写函数不接入等于没有。"""
         src = (Path(__file__).resolve().parent.parent
-               / "skills" / "zcode-tokenspeed" / "scripts" / "doctor.py")
+               / "scripts" / "doctor.py")
         text = src.read_text(encoding="utf-8")
         # 只看 main() 里的调用点（函数定义处也含同名子串，不能拿 index() 全局找）
         body = text[text.index("def main()"):]
@@ -2362,7 +2357,7 @@ class TestDoctorWatchdogSection(unittest.TestCase):
         自检会静默地把所有看护都统计成「启动」而永远不报警。
         """
         src = (Path(__file__).resolve().parent.parent
-               / "skills" / "zcode-tokenspeed" / "scripts" / "apply_after_exit.py")
+               / "scripts" / "apply_after_exit.py")
         text = src.read_text(encoding="utf-8")
         for phrase in ("看护启动，等待 ZCode 退出", "ZCode 已退出（等待", "DONE",
                        "已再次运行", "等待超时"):
@@ -2390,7 +2385,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
     """
 
     SCRIPTS = (Path(__file__).resolve().parent.parent
-               / "skills" / "zcode-tokenspeed" / "scripts")
+               / "scripts")
 
     def _runs_without_timeout(self, path: Path) -> list[int]:
         """返回该文件里所有「缺 timeout=」的 subprocess.run 的行号。"""
@@ -2551,6 +2546,7 @@ class TestPluginHookSpec(unittest.TestCase):
             self.assertIn("python3", h["command"], f"{path} 缺少 python3 兜底")
             self.assertIn("CLAUDE_PLUGIN_ROOT", h["command"],
                           f"{path} 应该用 ${{CLAUDE_PLUGIN_ROOT}} 定位脚本，不要写死路径")
+            self.assertIn("${CLAUDE_PLUGIN_ROOT}/scripts/sync.py", h["command"], path)
 
 
 # ------------------------------------------------------- bootstrap.py（引导脚本）

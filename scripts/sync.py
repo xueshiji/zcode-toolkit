@@ -22,6 +22,7 @@
 诊断日志：scripts/_sync.log
 心跳文件：scripts/_sync.last（每次被调用都刷新，用来证明「钩子到底跑没跑」）
 安装自检：python doctor.py（一条命令给出整条链路的结论）
+钩子正常执行时不向会话输出任何文本。
 """
 
 import json
@@ -29,7 +30,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 try:                                   # 控制台编码/窗口安全网（见 _console.py 的说明）
@@ -50,11 +50,6 @@ LOG = HERE / "_sync.log"
 # 为什么需要它：没拨过开关时 sync 什么也不做、日志也是空的，「钩子没触发」与
 # 「触发了但无事可做」在日志里长得一模一样——排查安装问题时这是最关键的一条信息。
 STAMP = HERE / "_sync.last"
-# 首次自动注入的标记：用来保证「装好了，正在自动注入」这条会话提示只出现一次，
-# 不然后面每次开会话都弹一遍，很快就变成噪声。
-MARKER = HERE / "_autoinject.done"
-# 客户端指纹记录：用来检测「ZCode 客户端是否刚升级过」
-CLIENT_FINGERPRINT = HERE / "_client_fingerprint.json"
 
 # 配置键 -> (zcode_patcher.py 参数, 是否重打包级)
 PATCHES = [
@@ -158,72 +153,25 @@ def _coerce(raw):
 
 
 def declared_defaults() -> dict:
-    """读插件清单 `plugin.json` 里 `userConfig.*.default` 声明的默认值。
-
-    **这是「零配置自动注入」的关键一环**：ZCode 只在用户点过「保存配置」之后才把
-    `plugins.options` 写进 `config.json`；从没保存过就什么都没有。此时若按旧逻辑
-    「没表态就不动」，用户看到的就是「装好了但没生效」——而这恰恰是最常见的抱怨。
-    退回清单默认值之后，装完重启一次即自动注入，不必打开配置页、不必跑任何命令。
-
-    向上找几层是为了兼容三种插件落点（市场根即插件根 / cache 的版本目录 / plugins 子目录）。
-
-    ⚠️ 两道防护，都是为了「别读到**别人的**清单」：
-
-    1. **只找到插件边界为止**（`_plugin_boundary`）—— 原先无条件 `HERE.parents[2:6]`，
-       在仓库布局下会一路走到**盘符根**（`F:\\`）。用户把压缩包解到盘符根是常见操作，
-       一旦那里躺着一个无关的 `.zcode-plugin/plugin.json`，开关默认值就会被它劫持，
-       而且完全不报错。
-    2. **清单必须确实是本插件的**（`name` 对得上）—— 上级目录里出现任何别的清单时，
-       不能因为「它先被扫到」就用它的默认值。
-    """
-    for base in _plugin_boundary():
-        for rel in (".zcode-plugin/plugin.json", ".claude-plugin/plugin.json"):
-            p = base / rel
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            # 必须是本插件的清单：`name` 精确等于插件 id（`_is_our_key` 的同一套判定）
-            if not _is_our_key(data.get("name")):
-                log(f"跳过不是本插件的清单（name={data.get('name')!r}）：{p}")
-                continue
-            uc = data.get("userConfig")
-            if not isinstance(uc, dict):
-                continue
-            out = {k: v["default"] for k, v in uc.items()
-                   if isinstance(v, dict) and isinstance(v.get("default"), bool)}
-            if out:
-                return out
+    """读取插件根清单中的 userConfig 布尔默认值。"""
+    for rel in (".zcode-plugin/plugin.json", ".claude-plugin/plugin.json"):
+        p = HERE.parent / rel
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not _is_our_key(data.get("name")):
+            log(f"跳过不是本插件的清单（name={data.get('name')!r}）：{p}")
+            continue
+        uc = data.get("userConfig")
+        if not isinstance(uc, dict):
+            continue
+        out = {k: v["default"] for k, v in uc.items()
+               if isinstance(v, dict) and isinstance(v.get("default"), bool)}
+        if out:
+            return out
     log("没找到插件清单，取不到默认值")
     return {}
-
-
-def _plugin_boundary() -> list[Path]:
-    """从脚本目录向上返回「可能放着本插件清单」的目录，**到插件边界为止**。
-
-    三种落点（见模块 docstring）对应清单所在层：
-      * 市场根即插件根 : `<市场>/skills/<插件>/scripts` → 清单在 `parents[2]`
-      * cache 版本目录 : `.../<插件>/<版本>/skills/<插件>/scripts` → 清单在 `parents[2]`
-      * plugins 子目录 : `<市场>/plugins/<插件>/skills/<插件>/scripts` → 清单在 `parents[2]`
-
-    所以正常情况下 `parents[2]` 就够了；再往上多找几层只是为历史/异形布局兜底。
-    但**绝不能无限向上**：遇到盘符根（`F:\\`）或文件系统根（`/`）必须停 ——
-    那里出现的同名清单不属于本插件，用它等于让无关文件劫持开关默认值。
-
-    另外一旦发现某个目录**就是**本插件的根（含 `skills/<插件>` 结构），
-    说明已经到边界，再往上只会看到无关目录，直接停。
-    """
-    out: list[Path] = []
-    for base in list(HERE.parents):
-        if base == base.parent:         # 盘符根 / 文件系统根 → 停，绝不参与
-            break
-        out.append(base)
-        # 插件根特征：本目录下直接有 skills/<插件名> → 已到边界，再往上只会看到无关目录
-        if (base / "skills" / PLUGIN_ID_PREFIX).is_dir():
-            break
-        if len(out) >= 6:               # 与原实现的搜索深度保持一致的兜底上限
-            break
-    return out
 
 
 def read_options():
@@ -514,115 +462,6 @@ def run_sync(echo: bool = False) -> str:
     return summary
 
 
-def get_client_fingerprint() -> dict:
-    """获取当前 ZCode 客户端安装指纹（版本号、asar 路径、大小与修改时间）。"""
-    try:
-        sys.path.insert(0, str(HERE))
-        import zcode_patcher as zp
-        asars = zp._resolve_asars(None)
-        if not asars:
-            return {}
-        asar = asars[0]
-        stat = asar.stat()
-        ver = str(zp.asar_version(asar) or "")
-        return {
-            "asar_path": str(asar.resolve()),
-            "version": ver,
-            "size": stat.st_size,
-            "mtime": int(stat.st_mtime),
-        }
-    except (Exception, SystemExit):
-        return {}
-
-
-def detect_upgrade_or_first_run() -> tuple[bool, bool, str]:
-    """检测是否是首次自动注入，或是客户端升级后的首次自愈注入。
-    返回: (should_notify, is_upgrade, client_version)
-    """
-    cur_fp = get_client_fingerprint()
-    cur_ver = cur_fp.get("version", "")
-    is_upgrade = False
-
-    if cur_fp and CLIENT_FINGERPRINT.is_file():
-        try:
-            old_fp = json.loads(CLIENT_FINGERPRINT.read_text(encoding="utf-8"))
-            if old_fp.get("asar_path") == cur_fp.get("asar_path"):
-                if old_fp.get("version") and cur_ver and old_fp.get("version") != cur_ver:
-                    is_upgrade = True
-                elif old_fp.get("size") != cur_fp.get("size"):
-                    is_upgrade = True
-        except Exception:
-            pass
-
-    if cur_fp:
-        try:
-            CLIENT_FINGERPRINT.write_text(json.dumps(cur_fp, ensure_ascii=False), encoding="utf-8")
-        except Exception:
-            pass
-
-    if is_upgrade:
-        MARKER.unlink(missing_ok=True)
-        try:
-            MARKER.write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
-        except Exception:
-            pass
-        log(f"检测到客户端升级 (v{cur_ver})，重置注入提示并准备自动重新注入")
-        return True, True, cur_ver
-
-    if not MARKER.exists():
-        try:
-            MARKER.write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
-        except Exception:
-            return False, False, cur_ver
-        return True, False, cur_ver
-
-    return False, False, cur_ver
-
-
-def first_auto_inject() -> bool:
-    """是不是这个插件安装后的第一次自动注入（兼容旧接口与测试断言）。"""
-    try:
-        if MARKER.exists():
-            return False
-        MARKER.write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
-        return True
-    except Exception:
-        return False
-
-
-NOTICE_HEAD = "ZCode Patcher 已自动接管本地补丁注入（无需手动配置）"
-
-
-def build_notice(is_upgrade: bool = False, version: str = "") -> str:
-    """自动注入时注入会话的说明（区分首次安装与客户端升级）。"""
-    doctor = HERE / "doctor.py"
-    ver_tag = f"至 v{version} " if version else ""
-    if is_upgrade:
-        return (
-            f"检测到 ZCode 客户端已升级{ver_tag}！官方升级会覆盖客户端文件，TPS 状态栏补丁已在后台自动重新排期：\n"
-            "· 会在你**完全退出 ZCode**（托盘图标右键 → 退出，关窗口不算）时由后台看护自动写入；\n"
-            "  写入完成后看护会自动重启 ZCode，下次启动即可恢复状态栏！\n"
-            "· 随时可运行自检核对当前补丁状态（只读）：\n"
-            f'    python "{doctor}"'
-        )
-    return (
-        f"{NOTICE_HEAD}。本次会话启动时已在后台开始同步：\n"
-        "· TPS 状态栏补丁需要你**完全退出 ZCode**（托盘图标右键 → 退出）时才会写入 ——\n"
-        "  客户端运行期间会拒绝改写 app.asar；退出后由看护写入，"
-        "并自动把 ZCode 重新拉起来，再启动即可见。\n"
-        "这一条只在首次自动注入时出现。想核对结果可以运行（只读，可选）：\n"
-        f'    python "{doctor}"'
-    )
-
-
-def emit_notice(is_upgrade: bool = False, version: str = "") -> None:
-    """往会话里注入一条说明，让「自动注入到底做没做」看得见。"""
-    try:
-        print(json.dumps({"additionalContext": build_notice(is_upgrade, version)}, ensure_ascii=False))
-    except Exception as exc:
-        log(f"提示输出失败: {exc!r}")
-
-
 def main() -> None:
     """入口分流：钩子只负责「登记心跳 + 后台化」，干活交给 --worker 子进程。"""
     argv = sys.argv[1:]
@@ -635,9 +474,6 @@ def main() -> None:
     if "--detach" in argv:
         # 钩子模式：先留下心跳（哪怕后台起不来也证明钩子跑过），再立刻返回
         beat("已启动（后台同步）")
-        notify, is_up, ver = detect_upgrade_or_first_run()
-        if notify:
-            emit_notice(is_upgrade=is_up, version=ver)
         if not spawn_detached(["--worker", "--from-hook"]):
             beat(run_sync(echo=False))  # 兜底：后台起不来就前台做完
         return

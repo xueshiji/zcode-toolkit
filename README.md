@@ -1,7 +1,7 @@
 # zcode-tokenspeed · ZCode TPS 性能状态栏
 
 <p align="left">
-  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.7.1-blue.svg?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/c80361619/zcode-toolkit/releases"><img src="https://img.shields.io/badge/version-0.8.0-blue.svg?style=flat-square" alt="Version"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dependencies-0%20(std%20only)-success.svg?style=flat-square" alt="Dependencies">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square" alt="Platform">
@@ -15,6 +15,7 @@
 - 🖱️ **位置随你选**：输入框下方（默认）/ 输入框工具栏 / 会话顶部 sticky，右键切换并记忆。
 - 🛡️ **升级无感自愈**：客户端升级覆盖 `app.asar` 后，插件自动感知并重新排期注入。
 - ♻️ **幂等、安全、可还原**：全程 Python 标准库，零第三方依赖；写入前自动备份并校验指纹。
+- 🪶 **不污染会话**：插件只注册静默后台钩子和配置项，不添加斜杠命令、技能或会话附加文本。
 
 > **纯 Python 标准库驱动**：零第三方依赖、免编译；改动仅作用于本地客户端的 `app.asar`。
 >
@@ -31,7 +32,8 @@
 4. **完全退出并重启 ZCode**（托盘图标右键 → 退出），在新会话里发一条消息。
    状态栏会在下次启动后出现（补丁只在 ZCode 退出时写入）。
 
-> 插件清单默认开启，装完无需打开配置页。想关闭时在插件配置页把「TPS 状态栏」拨成关并保存，
+> 插件清单默认开启，装完无需打开配置页。插件只注册静默后台钩子，不会向会话注入命令、
+> 技能或说明文字。想关闭时在插件配置页把「TPS 状态栏」拨成关并保存，
 > 下次完全退出 ZCode 时会自动还原。
 
 ---
@@ -56,12 +58,8 @@
 
 客户端升级会覆盖官方原版文件，插件检测到升级后会自动重新排期。若状态栏仍未出现：
 
-### 方案 A：客户端内一键修复（推荐）
-在任意对话窗口输入内置斜杠命令：
-- `/zcode-patch-doctor`：诊断插件、钩子、看护与补丁状态；
-- `/zcode-patch-apply`：重新应用 TPS 补丁。
-
-### 方案 B：一条命令自愈
+### 一条命令自愈
+下面的命令会自动找到已安装插件并执行诊断、修复和退出后看护：
 ```powershell
 # Windows (CMD / PowerShell)
 python -c "import pathlib,subprocess,sys; p=next(pathlib.Path.home().glob('.zcode/**/doctor.py'),None); subprocess.run([sys.executable,str(p),'--fix']) if p else print('未找到已安装的 ZCode 插件，请先在客户端内安装')"
@@ -73,7 +71,7 @@ python3 -c "import pathlib,subprocess,sys; p=next(pathlib.Path.home().glob('.zco
 
 常见原因：
 - **只关了窗口没退出进程**：需要托盘右键 → 退出，看护才能写 `app.asar`。
-- **插件更新了但补丁没更新**：`doctor.py` 会提示「旧版组件」，重新执行 `/zcode-patch-apply` 即可。
+- **插件更新了但补丁没更新**：`doctor.py --fix` 会提示或重新安排「旧版组件」的注入。
 - **客户端升级后**：首次会话会自动感知并排期重注入，通常退出重启一次即可恢复。
 
 ---
@@ -82,9 +80,9 @@ python3 -c "import pathlib,subprocess,sys; p=next(pathlib.Path.home().glob('.zco
 
 ```bash
 # 完全退出 ZCode 后，还原 TPS 补丁
-python "<插件目录>/skills/zcode-tokenspeed/scripts/zcode_patcher.py" --tps-footer --revert
+python "<插件目录>/scripts/zcode_patcher.py" --tps-footer --revert
 # 或一次还原全部（当前仅 TPS）
-python "<插件目录>/skills/zcode-tokenspeed/scripts/zcode_patcher.py" --all --revert
+python "<插件目录>/scripts/zcode_patcher.py" --all --revert
 ```
 然后在 ZCode **设置 → 插件 → 管理已安装** 中卸载插件。
 
@@ -109,13 +107,13 @@ git clone https://github.com/c80361619/zcode-toolkit.git
 ### 纯命令行模式（不装插件）
 ```bash
 # 只读体检（自动探测安装位置）
-python skills/zcode-tokenspeed/scripts/zcode_patcher.py --all --check
+python scripts/zcode_patcher.py --all --check
 
 # 完全退出 ZCode 后注入
-python skills/zcode-tokenspeed/scripts/zcode_patcher.py --all
+python scripts/zcode_patcher.py --all
 
 # 还原
-python skills/zcode-tokenspeed/scripts/zcode_patcher.py --tps-footer --revert
+python scripts/zcode_patcher.py --tps-footer --revert
 ```
 
 ### 引导脚本 / 全自动流水线
@@ -129,7 +127,7 @@ run.cmd                 # Windows 全流程
 ### 测试
 ```bash
 python -m unittest discover -s tests -v
-node tests/tps_pct_smoke.js
+node tests/tps_pct_smoke.js scripts/zcode-tps.js
 ```
 </details>
 
@@ -150,6 +148,10 @@ node tests/tps_pct_smoke.js
 
 <details>
 <summary><b>TPS 相关更新记录</b></summary>
+
+#### 0.8.0
+- 插件发行内容收敛为静默 `SessionStart` 钩子和 TPS 配置项，不再提供命令与技能；
+- 脚本目录迁移到 `scripts/`，钩子不再向会话输出附加文本。
 
 #### 0.7.1
 - tok/s 与 token 统计改为只取真实 usage，移除文本估算；

@@ -10,8 +10,8 @@ r"""zcode-tokenspeed 安装自检（doctor）——只读，不改任何文件�
 
 ⚠️ 相对路径是相对**当前所在目录**解析的。请在**克隆下来的仓库**里跑，
    或者用绝对路径：
-       python "%USERPROFILE%\zcode-toolkit\skills\zcode-tokenspeed\scripts\doctor.py"
-   （macOS / Linux：`python3 ~/zcode-toolkit/skills/zcode-tokenspeed/scripts/doctor.py`）
+       python "%USERPROFILE%\zcode-toolkit\scripts\doctor.py"
+   （macOS / Linux：`python3 ~/zcode-toolkit/scripts/doctor.py`）
    若想直接跑**已安装的那份**，先 `doctor.py --where` 看命中路径 —— 注意 GitHub 来源
    的市场是 `cli/plugins/cache/<市场名>/<插件名>/<版本>/`，脚本在版本目录里面。
 
@@ -245,13 +245,19 @@ def print_where(verbose: bool = False) -> int:
         print(f"\n{OK} 命中 {len(hits)} 份 {PLUGIN_NAME} 副本"
               f"（候选目录共 {len(roots)} 个，其余 {len(others)} 个是别的插件）：")
         for c in hits:
+            scripts = c / "scripts"
+            state = "" if (scripts / "doctor.py").is_file() else "（未找到 doctor.py）"
             print(f"    {c}")
             print(f"        清单版本 {_manifest_version(c)}"
-                  f"   脚本目录 {c / 'skills' / PLUGIN_NAME / 'scripts'}")
-        print(f"\n{INFO} 直接用绝对路径跑完整自检（复制下面这条）：")
-        print(f'       python "{hits[0] / "skills" / PLUGIN_NAME / "scripts" / "doctor.py"}"')
+                  f"   脚本目录 {scripts}{state}")
+        ready = next((c for c in hits if (c / "scripts" / "doctor.py").is_file()), None)
+        if ready:
+            print(f"\n{INFO} 直接用绝对路径跑完整自检（复制下面这条）：")
+            print(f'       python "{ready / "scripts" / "doctor.py"}"')
+        else:
+            print(f"\n{WARN} 命中副本中没有 scripts/doctor.py，请先更新插件。")
         print(f"{INFO} 注意：GitHub 来源的市场缓存成 cache/<市场名>/<插件名>/<版本>/，")
-        print("       脚本在**版本目录**里面 —— 站在 cache/<市场名> 这一层是找不到 skills/ 的。")
+        print("       脚本在**版本目录**里面的 scripts/ 下。")
     else:
         print(f"\n{BAD} 没有任何候选目录的清单 name == {PLUGIN_NAME} —— 插件没装成功")
         print(f"       → 「设置 → 插件 → 创建 → 添加插件市场」填 {REPO_NAME}，再点安装")
@@ -457,7 +463,7 @@ def check_hook(dirs: list[Path]) -> bool:
                           f"timeout={h.get('timeout') or h.get('timeoutMs')}")
                     print(f"        command: {h.get('command', '')}")
                     ok = True
-        sync = d / "skills" / PLUGIN_NAME / "scripts" / "sync.py"
+        sync = d / "scripts" / "sync.py"
         print(f"{OK if sync.is_file() else BAD} 目标脚本：{sync}")
     return ok
 
@@ -466,7 +472,7 @@ def check_heartbeat(dirs: list[Path]) -> tuple[bool, dict]:
     hr("7. 钩子执行痕迹")
     fired = False
     for d in dirs:
-        scripts = d / "skills" / PLUGIN_NAME / "scripts"
+        scripts = d / "scripts"
         stamp, logf = scripts / STAMP.name, scripts / LOG.name
         if stamp.is_file():
             fired = True
@@ -876,7 +882,7 @@ def main() -> int:
             "options_saved": saved,
             "saved_options": _saved_options(),
             "hook_fired": any(
-                (d / "skills" / PLUGIN_NAME / "scripts" / STAMP.name).is_file() for d in dirs),
+                (d / "scripts" / STAMP.name).is_file() for d in dirs),
             "zcode_log": {
                 "files": [f.name for f in log_files],
                 "startups": (log_data.get("startups") or [])[-5:],

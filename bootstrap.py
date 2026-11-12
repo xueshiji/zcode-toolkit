@@ -40,7 +40,7 @@ from pathlib import Path
 # --------------------------------------------------------------------------- #
 
 HERE = Path(__file__).resolve().parent          # 仓库根 = 本脚本所在目录
-SCRIPTS = HERE / "skills" / "zcode-tokenspeed" / "scripts"
+SCRIPTS = HERE / "scripts"
 TESTS = HERE / "tests"
 
 try:
@@ -332,8 +332,8 @@ def step_env(args) -> None:
 
     if not SCRIPTS.is_dir():
         die(f"找不到脚本目录：{SCRIPTS}\n    "
-            f"请确认本脚本位于仓库根目录（与 skills/ 同级）。")
-    ok("脚本目录结构完整（skills/zcode-tokenspeed/scripts）")
+            f"请确认本脚本位于仓库根目录，且 scripts/ 目录完整。")
+    ok("脚本目录结构完整（scripts/）")
 
     if os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() == 0:
         warn("当前以 root 运行。打补丁本身不需要 root，"
@@ -379,7 +379,7 @@ def step_install(args) -> None:
         ok("客户端位置探测完成")
     else:
         warn("未探测到 ZCode 安装（客户端未装 / 装在非标准位置均可忽略本步）。")
-        info("  稍后可用： python skills/zcode-tokenspeed/scripts/zcode_patcher.py <安装根>  ← 手动指定")
+        info("  稍后可用： python scripts/zcode_patcher.py <安装根>  ← 手动指定")
 
 
 def step_build(args) -> None:
@@ -467,7 +467,7 @@ def step_status(args) -> None:
 
     if "版本旧" in out or "旧版" in out:
         warn("检测到已注入的补丁版本较旧（或与当前脚本不同源）。")
-        info("  查看差异： python skills/zcode-tokenspeed/scripts/zcode_patcher.py --all --dry-run")
+        info("  查看差异： python scripts/zcode_patcher.py --all --dry-run")
     info("要把补丁真正写入客户端：**先完全退出 ZCode**，再执行")
     info(f"  {args.python} {PATCHER} --all")
 
@@ -567,8 +567,8 @@ def main() -> int:
     print()
     info("下一步：")
     info("  1. 没装插件： ZCode → 设置 → 插件 → 创建 → 添加插件市场 → c80361619/zcode-toolkit")
-    info("  2. 想用命令行： python skills/zcode-tokenspeed/scripts/zcode_patcher.py --all --check")
-    info("  3. 打了补丁但没生效： python skills/zcode-tokenspeed/scripts/doctor.py")
+    info("  2. 想用命令行： python scripts/zcode_patcher.py --all --check")
+    info("  3. 打了补丁但没生效： python scripts/doctor.py")
     return 0
 
 

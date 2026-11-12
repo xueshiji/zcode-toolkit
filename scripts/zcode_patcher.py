@@ -745,7 +745,7 @@ def _process_script_inject(asar: Path, check_only: bool, revert: bool, src_path:
     index.html </body> 前挂 <script> + 新增脚本条目,整体重排 asar、重算 integrity。
     ⚠️ zcode-tps.js 内**绝不调用 port.start()**(只 addEventListener,start 交给应用)——
     否则会消费掉服务端 Initialize 启动握手,ZCode 3.12.2 会卡在启动界面。
-    详见 scripts/zcode-tps.js 头部说明与 SKILL.md。
+    详见 scripts/zcode-tps.js 头部说明与 README。
     返回 True=成功/无需改动，False=失败。"""
     side = asar.with_name(asar.name + side_suffix)
     bak = asar.with_name(asar.name + bak_suffix)

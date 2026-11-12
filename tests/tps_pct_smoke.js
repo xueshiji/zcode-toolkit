@@ -7,14 +7,14 @@
 //   ① 渲染路径**必须**经 fmtPct，且不得再把裸 pct 拼进文本；
 //   ② fmtPct 的行为确实是「两位小数 + 四舍五入」，包括 toFixed 的二进制陷阱值。
 //
-// 用法：node tests/tps_pct_smoke.js skills/zcode-tokenspeed/scripts/zcode-tps.js
+// 用法：node tests/tps_pct_smoke.js scripts/zcode-tps.js
 // 退出码 0 = 通过；1 = 有断言失败；2 = 用法/读取错误。
 const fs = require("fs");
 
 const target = process.argv[2];
 if (!target) {
   console.error("用法：node tests/tps_pct_smoke.js <zcode-tps.js 的路径>");
-  console.error("例如：node tests/tps_pct_smoke.js skills/zcode-tokenspeed/scripts/zcode-tps.js");
+  console.error("例如：node tests/tps_pct_smoke.js scripts/zcode-tps.js");
   process.exit(2);
 }
 let src;
